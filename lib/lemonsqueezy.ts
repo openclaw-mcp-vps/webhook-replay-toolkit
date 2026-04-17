@@ -1,75 +1,52 @@
-import crypto from "node:crypto";
+import { createHmac } from "crypto";
+import { createCheckout, lemonSqueezySetup } from "@lemonsqueezy/lemonsqueezy.js";
 
-export type LemonWebhookPayload = {
-  meta?: {
-    event_name?: string;
-    custom_data?: {
-      user_id?: string;
-    };
-  };
-  data?: {
-    id?: string;
-    attributes?: {
-      status?: string;
-      user_email?: string;
-      customer_email?: string;
-      first_subscription_item?: {
-        subscription_id?: number;
-      };
-      custom_data?: {
-        user_id?: string;
-      };
-    };
-  };
-};
-
-export function verifyLemonSignature(rawBody: string, signature: string | null) {
-  const secret = process.env.LEMON_SQUEEZY_WEBHOOK_SECRET;
-
-  if (!secret || !signature) {
-    return false;
+function getRequiredEnv(name: string): string {
+  const value = process.env[name];
+  if (!value) {
+    throw new Error(`Missing environment variable: ${name}`);
   }
-
-  const hmac = crypto.createHmac("sha256", secret);
-  const digest = hmac.update(rawBody).digest("hex");
-  return crypto.timingSafeEqual(Buffer.from(digest), Buffer.from(signature));
+  return value;
 }
 
-export function getLemonCheckoutUrl(userId: string) {
-  const productId = process.env.NEXT_PUBLIC_LEMON_SQUEEZY_PRODUCT_ID;
-  const storeId = process.env.NEXT_PUBLIC_LEMON_SQUEEZY_STORE_ID;
+export function signCheckoutToken(userId: string): string {
+  return createHmac("sha256", getRequiredEnv("LEMON_SQUEEZY_WEBHOOK_SECRET")).update(userId).digest("hex");
+}
 
-  if (!productId || !storeId) {
-    return null;
-  }
+export function verifyCheckoutToken(userId: string, sig: string): boolean {
+  return signCheckoutToken(userId) === sig;
+}
 
-  const base = `https://checkout.lemonsqueezy.com/buy/${productId}`;
-  const params = new URLSearchParams({
-    "checkout[custom][user_id]": userId,
-    "checkout[media]": "0",
-    "checkout[dark]": "1",
-    "checkout[embed]": "1",
-    "checkout[logo]": "0",
-    "checkout[desc]": "0",
-    "checkout[store_id]": storeId,
+export async function createLemonCheckoutUrl(userId: string, email: string, origin: string): Promise<string> {
+  const apiKey = getRequiredEnv("LEMON_SQUEEZY_API_KEY");
+  const storeId = Number(getRequiredEnv("NEXT_PUBLIC_LEMON_SQUEEZY_STORE_ID"));
+  const productId = Number(getRequiredEnv("NEXT_PUBLIC_LEMON_SQUEEZY_PRODUCT_ID"));
+
+  lemonSqueezySetup({ apiKey, onError: (error) => console.error("Lemon Squeezy setup failed", error) });
+
+  const sig = signCheckoutToken(userId);
+  const checkout = await createCheckout(storeId, productId, {
+    checkoutOptions: {
+      embed: true,
+      media: false,
+      logo: false
+    },
+    checkoutData: {
+      email,
+      custom: {
+        user_id: userId
+      }
+    },
+    productOptions: {
+      enabledVariants: [],
+      redirectUrl: `${origin}/api/checkout?success=1&user=${encodeURIComponent(userId)}&sig=${sig}`
+    }
   });
 
-  return `${base}?${params.toString()}`;
-}
-
-export function inferSubscriptionState(eventName: string, payload: LemonWebhookPayload) {
-  if (eventName === "subscription_cancelled" || eventName === "subscription_expired") {
-    return "inactive";
+  const checkoutUrl = checkout.data?.data?.attributes?.url;
+  if (!checkoutUrl) {
+    throw new Error("Unable to create Lemon Squeezy checkout URL");
   }
 
-  if (eventName === "subscription_updated") {
-    const status = payload.data?.attributes?.status;
-    return status === "cancelled" || status === "expired" ? "inactive" : "active";
-  }
-
-  if (eventName === "order_created" || eventName === "subscription_created") {
-    return "active";
-  }
-
-  return "unknown";
+  return checkoutUrl;
 }

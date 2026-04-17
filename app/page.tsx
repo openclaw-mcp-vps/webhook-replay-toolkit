@@ -1,147 +1,127 @@
+import Script from "next/script";
 import Link from "next/link";
-import { cookies } from "next/headers";
-import { Bug, RotateCcw, ShieldCheck, Zap } from "lucide-react";
-import { PricingTable } from "@/components/pricing-table";
-import { PAID_COOKIE } from "@/lib/constants";
+import { ArrowRight, Repeat2, ShieldCheck, Webhook } from "lucide-react";
+import { CheckoutButton } from "@/components/checkout-button";
+import { LoginForm } from "@/components/login-form";
 
-export default async function Home() {
-  const store = await cookies();
-  const isPaid = store.get(PAID_COOKIE)?.value === "1";
-  const checkoutUrl = "/api/lemonsqueezy/checkout";
-
+export default function HomePage() {
   return (
-    <main className="mx-auto flex min-h-screen max-w-6xl flex-col gap-20 px-6 py-12 md:px-10">
-      <header className="rounded-2xl border border-[#30363d] bg-[#161b22]/80 p-6 backdrop-blur">
-        <nav className="flex flex-col gap-6 md:flex-row md:items-center md:justify-between">
-          <p className="text-lg font-semibold text-[#f0f6fc]">Webhook Replay Toolkit</p>
-          <div className="flex flex-wrap items-center gap-4 text-sm">
-            <a href="#problem" className="text-[#8b949e] hover:text-[#58a6ff]">
-              Problem
-            </a>
-            <a href="#solution" className="text-[#8b949e] hover:text-[#58a6ff]">
-              Solution
-            </a>
-            <a href="#pricing" className="text-[#8b949e] hover:text-[#58a6ff]">
-              Pricing
-            </a>
-            <a href="#faq" className="text-[#8b949e] hover:text-[#58a6ff]">
-              FAQ
-            </a>
-            <Link href={isPaid ? "/dashboard" : "#pricing"} className="rounded-md bg-[#238636] px-4 py-2 text-white hover:bg-[#2ea043]">
-              {isPaid ? "Open Dashboard" : "Unlock Access"}
-            </Link>
-          </div>
-        </nav>
+    <main className="min-h-screen">
+      <Script src="https://app.lemonsqueezy.com/js/lemon.js" strategy="afterInteractive" />
+      <header className="mx-auto flex w-full max-w-6xl flex-col gap-4 px-6 py-6 sm:flex-row sm:items-center sm:justify-between">
+        <Link href="/" className="text-lg font-semibold tracking-tight">
+          Webhook Replay Toolkit
+        </Link>
+        <LoginForm />
       </header>
 
-      <section className="grid gap-8 md:grid-cols-2 md:items-center">
-        <div className="space-y-5">
-          <p className="inline-flex rounded-full border border-[#30363d] px-3 py-1 text-xs uppercase tracking-wide text-[#8b949e]">
-            Developer Tooling · $15/mo
+      <section className="mx-auto grid w-full max-w-6xl gap-8 px-6 pb-16 pt-8 md:grid-cols-[1.2fr_0.8fr] md:pt-14">
+        <div>
+          <p className="mb-3 inline-flex rounded-full border border-[var(--border)] bg-[var(--surface)] px-3 py-1 text-xs text-[var(--muted)]">
+            Capture real Stripe, Shopify, and GitHub webhooks and replay them against localhost
           </p>
-          <h1 className="text-4xl font-bold leading-tight text-[#f0f6fc] md:text-5xl">
-            Capture real Stripe, Shopify, and GitHub webhooks. Replay them anywhere.
+          <h1 className="text-4xl font-semibold leading-tight tracking-tight sm:text-5xl">
+            Stop waiting for webhooks to fire again. Capture once, replay anywhere.
           </h1>
-          <p className="text-lg text-[#8b949e]">
-            Production webhook failed at 2AM? Keep the exact payload, headers, and signature context. Replay to localhost, staging, or prod in one click.
+          <p className="mt-5 max-w-2xl text-base leading-7 text-[var(--muted)]">
+            Webhook Replay Toolkit records every incoming webhook with raw headers and body, so you can replay the exact payload
+            into `localhost`, staging, or production while debugging. No more brittle curl scripts or waiting for another charge,
+            order, or push event.
           </p>
-          <div className="flex flex-wrap gap-3">
-            <Link href="#pricing" className="rounded-md bg-[#238636] px-5 py-3 font-medium text-white hover:bg-[#2ea043]">
-              Start paid access
+          <div className="mt-8 flex flex-col gap-3 sm:flex-row sm:items-center">
+            <CheckoutButton />
+            <Link
+              href="/dashboard"
+              className="inline-flex items-center gap-2 rounded-md border border-[var(--border)] bg-[var(--surface)] px-5 py-3 text-sm hover:bg-[var(--surface-2)]"
+            >
+              Open dashboard <ArrowRight className="h-4 w-4" />
             </Link>
-            <Link href="/dashboard" className="rounded-md border border-[#30363d] px-5 py-3 font-medium text-[#c9d1d9] hover:bg-[#161b22]">
-              View dashboard
-            </Link>
           </div>
         </div>
-        <div className="rounded-2xl border border-[#30363d] bg-[#161b22] p-6">
-          <p className="mb-4 text-sm text-[#8b949e]">Why teams use it</p>
-          <div className="space-y-4">
-            {[
-              "No more waiting for another Stripe checkout event.",
-              "No more hand-written curl scripts for every provider.",
-              "No more guessing whether your local payload matches production.",
-            ].map((item) => (
-              <div key={item} className="rounded-lg border border-[#30363d] bg-[#0d1117] p-4 text-sm text-[#c9d1d9]">
-                {item}
-              </div>
-            ))}
-          </div>
+
+        <div className="rounded-xl border border-[var(--border)] bg-[var(--surface)] p-6 shadow-2xl shadow-black/20">
+          <h2 className="text-base font-medium">What gets stored per webhook</h2>
+          <ul className="mt-4 space-y-3 text-sm text-[var(--muted)]">
+            <li className="flex items-start gap-2">
+              <Webhook className="mt-0.5 h-4 w-4 text-[var(--accent)]" />
+              Provider and event type (`invoice.payment_failed`, `orders/create`, `push`)
+            </li>
+            <li className="flex items-start gap-2">
+              <ShieldCheck className="mt-0.5 h-4 w-4 text-[var(--accent)]" />
+              Full headers, raw body, source IP, method, and received timestamp
+            </li>
+            <li className="flex items-start gap-2">
+              <Repeat2 className="mt-0.5 h-4 w-4 text-[var(--accent)]" />
+              Replay history with response code, latency, and error logs
+            </li>
+          </ul>
         </div>
       </section>
 
-      <section id="problem" className="space-y-6">
-        <h2 className="text-3xl font-bold text-[#f0f6fc]">The painful webhook loop</h2>
-        <div className="grid gap-4 md:grid-cols-3">
-          <article className="rounded-xl border border-[#30363d] bg-[#161b22] p-5">
-            <Bug className="mb-3 h-5 w-5 text-[#f85149]" />
-            <h3 className="mb-2 font-semibold text-[#f0f6fc]">Async bugs vanish fast</h3>
-            <p className="text-sm text-[#8b949e]">
-              A failed webhook event is gone unless you explicitly persisted it with headers and body.
+      <section className="border-y border-[var(--border)] bg-[var(--surface)]/50 py-16">
+        <div className="mx-auto grid w-full max-w-6xl gap-8 px-6 md:grid-cols-3">
+          <article>
+            <h3 className="text-lg font-semibold">Problem</h3>
+            <p className="mt-3 text-sm leading-7 text-[var(--muted)]">
+              Webhooks are asynchronous and often non-idempotent. When one fails in production, developers spend hours trying to
+              recreate the exact request that already happened.
             </p>
           </article>
-          <article className="rounded-xl border border-[#30363d] bg-[#161b22] p-5">
-            <RotateCcw className="mb-3 h-5 w-5 text-[#58a6ff]" />
-            <h3 className="mb-2 font-semibold text-[#f0f6fc]">Replay scripts rot instantly</h3>
-            <p className="text-sm text-[#8b949e]">
-              Throwaway curl commands miss provider-specific headers, odd body formats, and edge-case timing.
+          <article>
+            <h3 className="text-lg font-semibold">Solution</h3>
+            <p className="mt-3 text-sm leading-7 text-[var(--muted)]">
+              Point Stripe, Shopify, or GitHub to your dedicated capture URL. Every payload is archived and can be replayed against
+              any target endpoint instantly.
             </p>
           </article>
-          <article className="rounded-xl border border-[#30363d] bg-[#161b22] p-5">
-            <Zap className="mb-3 h-5 w-5 text-[#d29922]" />
-            <h3 className="mb-2 font-semibold text-[#f0f6fc]">Fixes take too long</h3>
-            <p className="text-sm text-[#8b949e]">
-              Teams burn hours waiting on customers to trigger the same event again.
+          <article>
+            <h3 className="text-lg font-semibold">Who It&apos;s For</h3>
+            <p className="mt-3 text-sm leading-7 text-[var(--muted)]">
+              Full-stack developers and solo founders shipping integrations for payments, ecommerce, and notifications.
             </p>
           </article>
         </div>
       </section>
 
-      <section id="solution" className="space-y-6">
-        <h2 className="text-3xl font-bold text-[#f0f6fc]">Built to debug webhooks in minutes</h2>
-        <div className="grid gap-4 md:grid-cols-2">
-          <div className="rounded-xl border border-[#30363d] bg-[#161b22] p-6">
-            <ShieldCheck className="mb-3 h-5 w-5 text-[#3fb950]" />
-            <h3 className="mb-2 text-xl font-semibold text-[#f0f6fc]">Capture exactly what hit production</h3>
-            <p className="text-sm text-[#8b949e]">
-              We store method, path, full headers, and raw request body so your replay is faithful to what happened.
-            </p>
-          </div>
-          <div className="rounded-xl border border-[#30363d] bg-[#161b22] p-6">
-            <RotateCcw className="mb-3 h-5 w-5 text-[#58a6ff]" />
-            <h3 className="mb-2 text-xl font-semibold text-[#f0f6fc]">Replay against any endpoint</h3>
-            <p className="text-sm text-[#8b949e]">
-              Fire the same payload at localhost tunnels, staging URLs, or production workers with one click.
-            </p>
+      <section id="pricing" className="mx-auto w-full max-w-6xl px-6 py-16">
+        <h2 className="text-2xl font-semibold">Simple pricing</h2>
+        <div className="mt-6 max-w-md rounded-xl border border-[var(--border)] bg-[var(--surface)] p-6">
+          <p className="text-3xl font-semibold">$15/mo</p>
+          <p className="mt-2 text-sm text-[var(--muted)]">Unlimited captured events, unlimited replays, one workspace.</p>
+          <ul className="mt-4 space-y-2 text-sm text-[var(--muted)]">
+            <li>Capture URLs for Stripe, Shopify, GitHub, Slack, Resend, and Postmark</li>
+            <li>Replay to localhost, staging, and production</li>
+            <li>Header/body diff-safe replay with observability</li>
+          </ul>
+          <div className="mt-6">
+            <CheckoutButton className="w-full rounded-md bg-[var(--accent)] px-5 py-3 text-sm font-semibold text-[#051b0a] hover:bg-[var(--accent-2)]" />
           </div>
         </div>
       </section>
 
-      <section id="pricing" className="mx-auto w-full max-w-2xl">
-        <PricingTable checkoutUrl={checkoutUrl} />
-      </section>
-
-      <section id="faq" className="space-y-4">
-        <h2 className="text-3xl font-bold text-[#f0f6fc]">FAQ</h2>
-        {[
-          {
-            q: "Which providers does this support?",
-            a: "Any provider that can send HTTP webhooks. Stripe, Shopify, GitHub, Slack, Resend, and Postmark work out of the box.",
-          },
-          {
-            q: "Can I replay to localhost?",
-            a: "Yes. Point replay at an ngrok/Cloudflare tunnel URL for your local dev server.",
-          },
-          {
-            q: "How is access controlled?",
-            a: "After successful checkout, your browser receives a secure paid-access cookie that unlocks the dashboard.",
-          },
-        ].map((item) => (
-          <article key={item.q} className="rounded-xl border border-[#30363d] bg-[#161b22] p-5">
-            <h3 className="mb-2 font-semibold text-[#f0f6fc]">{item.q}</h3>
-            <p className="text-sm text-[#8b949e]">{item.a}</p>
-          </article>
-        ))}
+      <section className="mx-auto w-full max-w-6xl px-6 pb-24">
+        <h2 className="text-2xl font-semibold">FAQ</h2>
+        <div className="mt-6 space-y-4">
+          <div className="rounded-lg border border-[var(--border)] bg-[var(--surface)] p-5">
+            <h3 className="font-medium">Does replay preserve the original body and headers?</h3>
+            <p className="mt-2 text-sm text-[var(--muted)]">
+              Yes. You can replay with original headers, body, and method, while removing transport-specific fields like `host` and
+              `content-length` that would break forwarding.
+            </p>
+          </div>
+          <div className="rounded-lg border border-[var(--border)] bg-[var(--surface)] p-5">
+            <h3 className="font-medium">Can I replay to localhost?</h3>
+            <p className="mt-2 text-sm text-[var(--muted)]">
+              Yes. Use `https://` tunnel URLs from ngrok/Cloudflare Tunnel or any reachable local bridge endpoint.
+            </p>
+          </div>
+          <div className="rounded-lg border border-[var(--border)] bg-[var(--surface)] p-5">
+            <h3 className="font-medium">How do I access the app after paying?</h3>
+            <p className="mt-2 text-sm text-[var(--muted)]">
+              Successful checkout redirects through a signed callback that sets a secure access cookie, unlocking dashboard routes.
+            </p>
+          </div>
+        </div>
       </section>
     </main>
   );

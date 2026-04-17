@@ -1,116 +1,113 @@
-import { randomUUID } from "node:crypto";
-import { NextResponse } from "next/server";
+import axios from "axios";
+import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
-import { cookies } from "next/headers";
-import { ensureDb, pool } from "@/lib/db";
-import { PAID_COOKIE, USER_COOKIE } from "@/lib/constants";
+import { auth } from "@/lib/auth";
+import { createReplay, getWebhookById } from "@/lib/database";
 
 const replaySchema = z.object({
   webhookId: z.string().uuid(),
   targetUrl: z.string().url(),
+  forwardOriginalHeaders: z.boolean().default(true),
+  timeoutMs: z.number().min(1000).max(30000).default(8000)
 });
 
-function sanitizeForwardHeaders(headers: Record<string, unknown>) {
-  const blocked = new Set([
-    "host",
-    "content-length",
-    "connection",
-    "accept-encoding",
-    "transfer-encoding",
-  ]);
-
-  return Object.fromEntries(
-    Object.entries(headers)
-      .filter(([key]) => !blocked.has(key.toLowerCase()))
-      .map(([key, value]) => [key, String(value)]),
-  );
-}
-
-export const dynamic = "force-dynamic";
-
-export async function POST(req: Request) {
-  const store = await cookies();
-  const userId = store.get(USER_COOKIE)?.value;
-  const paid = store.get(PAID_COOKIE)?.value === "1";
-
-  if (!userId || !paid) {
-    return NextResponse.json({ error: "Paid access required" }, { status: 403 });
+export async function POST(request: NextRequest) {
+  const session = await auth();
+  if (!session?.user?.id) {
+    return NextResponse.json({ ok: false, message: "Not authenticated" }, { status: 401 });
   }
 
-  const parsed = replaySchema.safeParse(await req.json());
+  const body = await request.json();
+  const parsed = replaySchema.safeParse(body);
+
   if (!parsed.success) {
-    return NextResponse.json({ error: "Invalid request body", details: parsed.error.flatten() }, { status: 400 });
+    return NextResponse.json({ ok: false, message: "Invalid replay payload" }, { status: 400 });
   }
 
-  await ensureDb();
-
-  const webhookRes = await pool.query<{
-    id: string;
-    method: string;
-    headers: Record<string, unknown>;
-    body: string;
-  }>(
-    `SELECT id, method, headers, body
-     FROM webhooks WHERE id = $1 AND user_id = $2 LIMIT 1`,
-    [parsed.data.webhookId, userId],
-  );
-
-  const webhook = webhookRes.rows[0];
+  const webhook = getWebhookById(session.user.id, parsed.data.webhookId);
   if (!webhook) {
-    return NextResponse.json({ error: "Webhook not found" }, { status: 404 });
+    return NextResponse.json({ ok: false, message: "Webhook not found" }, { status: 404 });
   }
 
-  const replayId = randomUUID();
-  const start = Date.now();
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort("Replay request timed out"), 15000);
+  const headers: Record<string, string> = {
+    "x-webhook-replay": "1",
+    "x-webhook-original-id": webhook.id
+  };
+
+  if (parsed.data.forwardOriginalHeaders) {
+    for (const [key, value] of Object.entries(webhook.headers)) {
+      if (["host", "content-length", "accept-encoding", "connection"].includes(key.toLowerCase())) {
+        continue;
+      }
+      headers[key] = value;
+    }
+  }
+
+  const startedAt = Date.now();
 
   try {
-    const response = await fetch(parsed.data.targetUrl, {
-      method: webhook.method,
-      headers: sanitizeForwardHeaders(webhook.headers),
-      body: webhook.body,
-      signal: controller.signal,
-      redirect: "manual",
+    const contentType = webhook.headers["content-type"] || "";
+    const payload = contentType.includes("application/json") ? safeJsonParse(webhook.body) : webhook.body;
+
+    const response = await axios.request({
+      url: parsed.data.targetUrl,
+      method: webhook.method as "POST" | "PUT" | "PATCH" | "DELETE" | "GET",
+      headers,
+      data: payload,
+      timeout: parsed.data.timeoutMs,
+      validateStatus: () => true
     });
-    const responseText = await response.text();
-    clearTimeout(timeout);
 
-    const durationMs = Date.now() - start;
-    const responseHeaders = Object.fromEntries(response.headers.entries());
-
-    await pool.query(
-      `INSERT INTO replays (id, webhook_id, user_id, target_url, status_code, response_headers, response_body, duration_ms)
-       VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7, $8)`,
-      [
-        replayId,
-        webhook.id,
-        userId,
-        parsed.data.targetUrl,
-        response.status,
-        JSON.stringify(responseHeaders),
-        responseText.slice(0, 4000),
-        durationMs,
-      ],
-    );
+    const replay = createReplay({
+      webhookId: webhook.id,
+      targetUrl: parsed.data.targetUrl,
+      status: response.status,
+      responseHeaders: objectHeaderMap(response.headers),
+      responseBody:
+        typeof response.data === "string" ? response.data.slice(0, 5000) : JSON.stringify(response.data, null, 2).slice(0, 5000),
+      durationMs: Date.now() - startedAt,
+      error: null
+    });
 
     return NextResponse.json({
-      id: replayId,
-      status: response.status,
-      durationMs,
-      data: responseText.slice(0, 4000),
+      ok: true,
+      message: `Replay sent (${response.status}) in ${replay.durationMs}ms`
     });
   } catch (error) {
-    clearTimeout(timeout);
-    const durationMs = Date.now() - start;
-    const message = error instanceof Error ? error.message : "Unknown replay error";
+    const replay = createReplay({
+      webhookId: webhook.id,
+      targetUrl: parsed.data.targetUrl,
+      status: null,
+      responseHeaders: {},
+      responseBody: "",
+      durationMs: Date.now() - startedAt,
+      error: error instanceof Error ? error.message : "Unknown replay error"
+    });
 
-    await pool.query(
-      `INSERT INTO replays (id, webhook_id, user_id, target_url, duration_ms, error)
-       VALUES ($1, $2, $3, $4, $5, $6)`,
-      [replayId, webhook.id, userId, parsed.data.targetUrl, durationMs, message],
+    return NextResponse.json(
+      {
+        ok: false,
+        message: `Replay failed after ${replay.durationMs}ms: ${replay.error}`
+      },
+      { status: 502 }
     );
-
-    return NextResponse.json({ error: message, durationMs }, { status: 502 });
   }
+}
+
+function safeJsonParse(text: string): unknown {
+  try {
+    return JSON.parse(text);
+  } catch {
+    return text;
+  }
+}
+
+function objectHeaderMap(headers: unknown): Record<string, string> {
+  if (!headers || typeof headers !== "object") {
+    return {};
+  }
+
+  return Object.fromEntries(
+    Object.entries(headers).map(([key, value]) => [key, typeof value === "string" ? value : JSON.stringify(value)])
+  );
 }

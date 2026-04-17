@@ -1,59 +1,56 @@
-import type { NextAuthOptions } from "next-auth";
-import CredentialsProvider from "next-auth/providers/credentials";
-import { cookies } from "next/headers";
-import { redirect } from "next/navigation";
-import { randomUUID } from "node:crypto";
-import { PAID_COOKIE, USER_COOKIE } from "@/lib/constants";
+import NextAuth from "next-auth";
+import Credentials from "next-auth/providers/credentials";
+import { createHash } from "crypto";
+import { z } from "zod";
+import { upsertUser } from "@/lib/database";
 
-export const authOptions: NextAuthOptions = {
+const credentialsSchema = z.object({
+  email: z.string().email(),
+  password: z.string().min(8)
+});
+
+export const { handlers, auth, signIn, signOut } = NextAuth({
   session: { strategy: "jwt" },
-  pages: { signIn: "/" },
   providers: [
-    CredentialsProvider({
-      name: "Access Code",
+    Credentials({
+      name: "email-password",
       credentials: {
-        code: { label: "Access Code", type: "password" },
+        email: { label: "Email", type: "email" },
+        password: { label: "Password", type: "password" }
       },
-      async authorize(credentials) {
-        const expected = process.env.DEMO_ACCESS_CODE;
-        if (!expected || credentials?.code !== expected) {
+      authorize: async (credentials) => {
+        const parsed = credentialsSchema.safeParse(credentials);
+        if (!parsed.success) {
           return null;
         }
 
-        return { id: "demo-user", name: "Demo User" };
-      },
-    }),
+        const email = parsed.data.email.toLowerCase();
+        const id = createHash("sha256").update(email).digest("hex").slice(0, 24);
+        upsertUser(id, email);
+
+        return {
+          id,
+          email,
+          name: email.split("@")[0]
+        };
+      }
+    })
   ],
-};
-
-export async function getOrCreateUserId() {
-  const store = await cookies();
-  const existing = store.get(USER_COOKIE)?.value;
-
-  if (existing) {
-    return existing;
+  pages: {
+    signIn: "/"
+  },
+  callbacks: {
+    jwt: async ({ token, user }) => {
+      if (user?.id) {
+        token.userId = user.id;
+      }
+      return token;
+    },
+    session: async ({ session, token }) => {
+      if (session.user && token.userId) {
+        session.user.id = String(token.userId);
+      }
+      return session;
+    }
   }
-
-  const generated = randomUUID();
-  store.set(USER_COOKIE, generated, {
-    httpOnly: true,
-    sameSite: "lax",
-    secure: process.env.NODE_ENV === "production",
-    maxAge: 60 * 60 * 24 * 365,
-    path: "/",
-  });
-
-  return generated;
-}
-
-export async function hasPaidAccess() {
-  const store = await cookies();
-  return store.get(PAID_COOKIE)?.value === "1";
-}
-
-export async function requirePaidAccess() {
-  const paid = await hasPaidAccess();
-  if (!paid) {
-    redirect("/?upgrade=1");
-  }
-}
+});

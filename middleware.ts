@@ -1,46 +1,28 @@
-import { NextResponse } from "next/server";
-import type { NextRequest } from "next/server";
-import { PAID_COOKIE, USER_COOKIE } from "@/lib/constants";
+import { NextRequest, NextResponse } from "next/server";
 
 export function middleware(request: NextRequest) {
-  const userId = request.cookies.get(USER_COOKIE)?.value;
-  const paid = request.cookies.get(PAID_COOKIE)?.value === "1";
-  const pathname = request.nextUrl.pathname;
+  const host = request.headers.get("host") || "";
+  const subdomainMatch = host.match(/^([a-z0-9_-]+)\.hooks\./i);
 
-  if (pathname.startsWith("/dashboard") && !paid) {
-    const url = request.nextUrl.clone();
-    url.pathname = "/";
-    url.searchParams.set("upgrade", "1");
-    const response = NextResponse.redirect(url);
-
-    if (!userId) {
-      response.cookies.set(USER_COOKIE, crypto.randomUUID(), {
-        httpOnly: true,
-        sameSite: "lax",
-        secure: process.env.NODE_ENV === "production",
-        path: "/",
-        maxAge: 60 * 60 * 24 * 365,
-      });
-    }
-
-    return response;
+  if (subdomainMatch && request.method === "POST" && request.nextUrl.pathname === "/") {
+    const rewriteUrl = request.nextUrl.clone();
+    rewriteUrl.pathname = `/api/webhooks/capture/${subdomainMatch[1]}`;
+    return NextResponse.rewrite(rewriteUrl);
   }
 
-  if (!userId) {
-    const response = NextResponse.next();
-    response.cookies.set(USER_COOKIE, crypto.randomUUID(), {
-      httpOnly: true,
-      sameSite: "lax",
-      secure: process.env.NODE_ENV === "production",
-      path: "/",
-      maxAge: 60 * 60 * 24 * 365,
-    });
-    return response;
+  if (request.nextUrl.pathname.startsWith("/dashboard")) {
+    const isPaid = request.cookies.get("wrt_paid")?.value === "1";
+    if (!isPaid) {
+      const redirectUrl = request.nextUrl.clone();
+      redirectUrl.pathname = "/";
+      redirectUrl.searchParams.set("paywall", "1");
+      return NextResponse.redirect(redirectUrl);
+    }
   }
 
   return NextResponse.next();
 }
 
 export const config = {
-  matcher: ["/((?!_next/static|_next/image|favicon.ico).*)"],
+  matcher: ["/((?!_next/static|_next/image|favicon.ico).*)"]
 };

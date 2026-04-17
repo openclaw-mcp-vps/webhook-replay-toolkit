@@ -1,58 +1,61 @@
-import { randomUUID } from "node:crypto";
-import { NextResponse } from "next/server";
-import { ensureDb, ensureUser, pool } from "@/lib/db";
+import { NextRequest, NextResponse } from "next/server";
+import { z } from "zod";
+import { createWebhook } from "@/lib/database";
 
-function inferProvider(headers: Headers) {
-  if (headers.get("stripe-signature")) return "stripe";
-  if (headers.get("x-shopify-hmac-sha256")) return "shopify";
-  if (headers.get("x-github-event")) return "github";
-  if (headers.get("x-slack-signature")) return "slack";
-  if (headers.get("x-postmark-signature")) return "postmark";
-  if (headers.get("x-resend-signature")) return "resend";
-  return "unknown";
+const paramsSchema = z.object({
+  userId: z.string().min(8)
+});
+
+function detectProvider(headers: Record<string, string>): { provider: string; eventType: string } {
+  if (headers["stripe-signature"]) {
+    return { provider: "Stripe", eventType: headers["stripe-event"] || "stripe.event" };
+  }
+
+  if (headers["x-shopify-topic"]) {
+    return { provider: "Shopify", eventType: headers["x-shopify-topic"] };
+  }
+
+  if (headers["x-github-event"]) {
+    return { provider: "GitHub", eventType: headers["x-github-event"] };
+  }
+
+  return { provider: "Unknown", eventType: headers["x-event-type"] || "unknown.event" };
 }
 
-async function capture(req: Request, { params }: { params: Promise<{ userId: string }> }) {
-  const { userId } = await params;
-  const requestId = randomUUID();
-  const body = await req.text();
-  const parsedUrl = new URL(req.url);
+export async function POST(request: NextRequest, context: { params: Promise<{ userId: string }> }) {
+  const rawParams = await context.params;
+  const parsedParams = paramsSchema.safeParse(rawParams);
 
-  const headers = Object.fromEntries(req.headers.entries());
-  const provider = inferProvider(req.headers);
-  const contentType = req.headers.get("content-type");
+  if (!parsedParams.success) {
+    return NextResponse.json({ error: "Invalid user id" }, { status: 400 });
+  }
 
-  await ensureDb();
-  await ensureUser(userId);
-
-  await pool.query(
-    `INSERT INTO webhooks (id, user_id, provider, method, path, query_string, headers, body, content_type, body_size)
-     VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8, $9, $10)`,
-    [
-      requestId,
-      userId,
-      provider,
-      req.method,
-      parsedUrl.pathname,
-      parsedUrl.searchParams.toString() || null,
-      JSON.stringify(headers),
-      body,
-      contentType,
-      Buffer.byteLength(body, "utf8"),
-    ],
-  );
-
-  return NextResponse.json({
-    ok: true,
-    id: requestId,
-    provider,
-    capturedAt: new Date().toISOString(),
+  const body = await request.text();
+  const headers: Record<string, string> = {};
+  request.headers.forEach((value, key) => {
+    headers[key.toLowerCase()] = value;
   });
+
+  const provider = detectProvider(headers);
+  const ip = request.headers.get("x-forwarded-for")?.split(",")[0]?.trim() || "unknown";
+  const query = request.nextUrl.searchParams.toString();
+
+  const record = createWebhook({
+    userId: parsedParams.data.userId,
+    provider: provider.provider,
+    eventType: provider.eventType,
+    method: request.method,
+    path: request.nextUrl.pathname,
+    query,
+    ip,
+    headers,
+    body,
+    bodyType: headers["content-type"] || "unknown"
+  });
+
+  return NextResponse.json({ received: true, id: record.id });
 }
 
-export const GET = capture;
-export const POST = capture;
-export const PUT = capture;
-export const PATCH = capture;
-export const DELETE = capture;
-export const OPTIONS = capture;
+export async function GET() {
+  return NextResponse.json({ error: "POST required" }, { status: 405 });
+}

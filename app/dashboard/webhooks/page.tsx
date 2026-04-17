@@ -1,70 +1,45 @@
-import Link from "next/link";
-import { cookies } from "next/headers";
-import { requirePaidAccess } from "@/lib/auth";
-import { USER_COOKIE } from "@/lib/constants";
-import { ensureDb, pool } from "@/lib/db";
+import { redirect } from "next/navigation";
+import { auth } from "@/lib/auth";
+import { listWebhooks } from "@/lib/database";
 import { WebhookList } from "@/components/webhook-list";
 
-type Props = {
-  searchParams: Promise<Record<string, string | string[] | undefined>>;
-};
-
-export default async function WebhooksPage({ searchParams }: Props) {
-  await requirePaidAccess();
-
-  const params = await searchParams;
-  const providerFilter = typeof params.provider === "string" ? params.provider.toLowerCase() : "";
-
-  const store = await cookies();
-  const userId = store.get(USER_COOKIE)?.value;
-
-  if (!userId) {
-    return null;
+export default async function WebhooksPage({
+  searchParams
+}: {
+  searchParams: Promise<{ provider?: string; q?: string }>;
+}) {
+  const session = await auth();
+  if (!session?.user?.id) {
+    redirect("/");
   }
 
-  await ensureDb();
-
-  const query = providerFilter
-    ? `SELECT id, provider, method, path, body_size, received_at::text AS received_at
-       FROM webhooks WHERE user_id = $1 AND provider = $2
-       ORDER BY received_at DESC LIMIT 100`
-    : `SELECT id, provider, method, path, body_size, received_at::text AS received_at
-       FROM webhooks WHERE user_id = $1
-       ORDER BY received_at DESC LIMIT 100`;
-
-  const values = providerFilter ? [userId, providerFilter] : [userId];
-  const { rows } = await pool.query(query, values);
+  const params = await searchParams;
+  const webhooks = listWebhooks(session.user.id, { provider: params.provider, search: params.q });
 
   return (
-    <main className="mx-auto flex min-h-screen w-full max-w-6xl flex-col gap-6 px-6 py-10">
-      <header className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
-        <div>
-          <h1 className="text-3xl font-bold text-[#f0f6fc]">Captured webhooks</h1>
-          <p className="text-sm text-[#8b949e]">Showing the latest 100 events for your workspace.</p>
-        </div>
-        <Link href="/dashboard" className="text-sm text-[#58a6ff] hover:underline">
-          Back to dashboard
-        </Link>
-      </header>
-
-      <div className="flex flex-wrap gap-2 text-xs">
-        {[
-          { label: "All", href: "/dashboard/webhooks" },
-          { label: "Stripe", href: "/dashboard/webhooks?provider=stripe" },
-          { label: "Shopify", href: "/dashboard/webhooks?provider=shopify" },
-          { label: "GitHub", href: "/dashboard/webhooks?provider=github" },
-        ].map((item) => (
-          <Link
-            key={item.label}
-            href={item.href}
-            className="rounded-full border border-[#30363d] px-3 py-1 text-[#8b949e] hover:bg-[#161b22]"
-          >
-            {item.label}
-          </Link>
-        ))}
-      </div>
-
-      <WebhookList webhooks={rows} />
-    </main>
+    <div className="space-y-5">
+      <h1 className="text-2xl font-semibold tracking-tight">Captured webhooks</h1>
+      <form className="grid gap-3 rounded-lg border border-[var(--border)] bg-[var(--surface)] p-4 sm:grid-cols-[160px_1fr_auto]">
+        <select
+          name="provider"
+          defaultValue={params.provider ?? "all"}
+          className="h-10 rounded-md border border-[var(--border)] bg-[#0b0f14] px-3 text-sm"
+        >
+          <option value="all">All providers</option>
+          <option value="Stripe">Stripe</option>
+          <option value="Shopify">Shopify</option>
+          <option value="GitHub">GitHub</option>
+          <option value="Unknown">Unknown</option>
+        </select>
+        <input
+          name="q"
+          defaultValue={params.q ?? ""}
+          placeholder="Search event type, payload, or path"
+          className="h-10 rounded-md border border-[var(--border)] bg-[#0b0f14] px-3 text-sm"
+        />
+        <button className="h-10 rounded-md border border-[var(--border)] px-4 text-sm hover:bg-[var(--surface-2)]">Filter</button>
+      </form>
+      <WebhookList webhooks={webhooks} />
+    </div>
   );
 }
