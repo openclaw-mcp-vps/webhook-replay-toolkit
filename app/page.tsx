@@ -1,126 +1,162 @@
+import Script from "next/script";
 import Link from "next/link";
-import { Disclosure, DisclosureButton, DisclosurePanel } from "@headlessui/react";
-import { CheckCircle2, ChevronDown, Repeat2, Shield, TimerReset, Webhook } from "lucide-react";
-import { auth } from "@/lib/auth";
+import { CheckCircle2, RefreshCcw, ShieldCheck, Zap } from "lucide-react";
+import { AuthPanel } from "@/components/AuthPanel";
+import { CheckoutButton } from "@/components/CheckoutButton";
+import { Badge } from "@/components/ui/badge";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { getAppSession } from "@/lib/auth";
 import { hasPaidAccess } from "@/lib/paywall";
-import { Button } from "@/components/ui/button";
-import { AuthForm } from "@/components/auth-form";
-import { Pricing } from "@/components/pricing";
 
-const faqs = [
-  {
-    q: "Will this work with signed webhooks like Stripe?",
-    a: "Yes. We store raw headers and body exactly as received so you can replay realistic payloads into your signature verification flow."
-  },
-  {
-    q: "Can I replay to localhost from production captures?",
-    a: "Yes. Point replay to ngrok, Cloudflare Tunnel, localhost.run, or any reachable URL."
-  },
-  {
-    q: "Do you support more than Stripe, Shopify, and GitHub?",
-    a: "Yes. Any webhook source can be captured, and we auto-detect common providers like Slack, Resend, and Postmark when possible."
-  },
-  {
-    q: "How fast can I debug a failed event?",
-    a: "Usually under 60 seconds. Find the event in the dashboard, select your endpoint, and replay instantly with original headers."
-  }
-];
-
-export default async function LandingPage() {
-  const session = await auth();
-  const paid = await hasPaidAccess(session?.user?.id);
+export default async function HomePage() {
+  const session = await getAppSession();
+  const paid = session?.user?.id ? await hasPaidAccess(session.user.id) : false;
 
   return (
-    <main>
-      <section className="mx-auto grid max-w-6xl gap-10 px-4 pb-16 pt-14 sm:px-6 md:grid-cols-[1fr_340px]">
-        <div className="space-y-6">
-          <p className="inline-flex rounded-full border border-[#1f6feb55] bg-[#1f6feb22] px-3 py-1 text-xs text-[#58a6ff]">
-            Built for webhook-heavy apps shipping on tight timelines
-          </p>
-          <h1 className="text-4xl font-bold leading-tight tracking-tight sm:text-5xl">
-            Capture real webhooks from production, replay them anywhere, and fix bugs before users notice.
+    <main className="mx-auto flex min-h-screen w-full max-w-6xl flex-col gap-12 px-4 py-10 sm:px-6 lg:px-8">
+      <Script src="https://assets.lemonsqueezy.com/lemon.js" strategy="afterInteractive" />
+
+      <header className="grid gap-6 rounded-2xl border border-slate-800 bg-gradient-to-b from-slate-900 to-slate-950 p-8 lg:grid-cols-[1.25fr_1fr]">
+        <div className="grid gap-4">
+          <Badge className="w-fit border-sky-400/40 bg-sky-500/10 text-sky-200">Developer tool</Badge>
+          <h1 className="text-4xl font-bold tracking-tight text-white md:text-5xl">
+            Capture real Stripe, Shopify, and GitHub webhooks and replay them against localhost.
           </h1>
-          <p className="max-w-2xl text-lg text-[#9ba5b3]">
-            Webhook Replay Toolkit gives every event a second life. Record full request context once, then replay exact payloads into localhost, staging, or production on demand.
+          <p className="max-w-2xl text-lg text-slate-300">
+            Stop waiting for the next webhook fire. Record production payloads with full headers and raw body,
+            then replay them to localhost, staging, or prod in one click.
           </p>
-          <div className="flex flex-wrap gap-3">
-            <Button asChild>
-              <Link href={session ? "/dashboard" : "#pricing"}>Start replaying webhooks</Link>
-            </Button>
-            <Button asChild variant="secondary">
-              <Link href="/dashboard">View product demo</Link>
-            </Button>
+          <div className="flex flex-wrap gap-3 text-sm text-slate-300">
+            <span className="rounded-md border border-slate-700 px-3 py-1">Unique capture URL per user</span>
+            <span className="rounded-md border border-slate-700 px-3 py-1">Replay logs with status codes</span>
+            <span className="rounded-md border border-slate-700 px-3 py-1">Supports JSON and binary bodies</span>
           </div>
-          <div className="grid gap-3 pt-3 sm:grid-cols-3">
-            <div className="rounded-lg border border-[#30363d] bg-[#161b22] p-3 text-sm"><strong className="text-[#3fb950]">1200+</strong><br />Events replayed monthly per active team</div>
-            <div className="rounded-lg border border-[#30363d] bg-[#161b22] p-3 text-sm"><strong className="text-[#3fb950]">6 providers</strong><br />Detected out of the box</div>
-            <div className="rounded-lg border border-[#30363d] bg-[#161b22] p-3 text-sm"><strong className="text-[#3fb950]">~60 sec</strong><br />Average bug reproduction time</div>
-          </div>
-        </div>
-        <AuthForm />
-      </section>
-
-      <section className="mx-auto max-w-6xl px-4 py-10 sm:px-6">
-        <div className="grid gap-4 md:grid-cols-3">
-          <article className="rounded-xl border border-[#30363d] bg-[#161b22] p-5">
-            <TimerReset className="mb-3 h-6 w-6 text-[#58a6ff]" />
-            <h2 className="mb-2 text-lg font-semibold">The problem</h2>
-            <p className="text-sm text-[#9ba5b3]">Webhook bugs are asynchronous and expensive to reproduce. By the time you investigate, the original event is gone.</p>
-          </article>
-          <article className="rounded-xl border border-[#30363d] bg-[#161b22] p-5">
-            <Webhook className="mb-3 h-6 w-6 text-[#58a6ff]" />
-            <h2 className="mb-2 text-lg font-semibold">The solution</h2>
-            <p className="text-sm text-[#9ba5b3]">Use your dedicated capture URL to store payloads, headers, and method. Then replay the exact request to your chosen endpoint.</p>
-          </article>
-          <article className="rounded-xl border border-[#30363d] bg-[#161b22] p-5">
-            <Shield className="mb-3 h-6 w-6 text-[#58a6ff]" />
-            <h2 className="mb-2 text-lg font-semibold">The outcome</h2>
-            <p className="text-sm text-[#9ba5b3]">Less waiting, less brittle curl scripts, faster incident response, and cleaner integration test loops.</p>
-          </article>
-        </div>
-      </section>
-
-      <section className="mx-auto max-w-6xl px-4 py-10 sm:px-6">
-        <h2 className="mb-6 text-2xl font-bold">How it works</h2>
-        <div className="space-y-4">
-          <div className="rounded-lg border border-[#30363d] bg-[#161b22] p-4 text-sm">
-            <p className="font-semibold">1. Point provider webhooks to your capture URL</p>
-            <p className="mt-1 text-[#9ba5b3]">Use `/api/capture/{'{your-user-id}'}` or a mapped subdomain endpoint in your edge proxy.</p>
-          </div>
-          <div className="rounded-lg border border-[#30363d] bg-[#161b22] p-4 text-sm">
-            <p className="font-semibold">2. Inspect payload and headers in one place</p>
-            <p className="mt-1 text-[#9ba5b3]">Search by provider, inspect raw JSON, and verify signature-related headers quickly.</p>
-          </div>
-          <div className="rounded-lg border border-[#30363d] bg-[#161b22] p-4 text-sm">
-            <p className="font-semibold">3. Replay to localhost, staging, or production</p>
-            <p className="mt-1 text-[#9ba5b3]">Re-run requests with original headers and body to reproduce exactly what happened in production.</p>
+          <div className="flex flex-wrap gap-3 pt-2">
+            {session ? (
+              <Link
+                href="/dashboard"
+                className="inline-flex h-11 items-center rounded-md bg-sky-500 px-6 font-semibold text-slate-950"
+              >
+                Open dashboard
+              </Link>
+            ) : null}
+            <a
+              href="#pricing"
+              className="inline-flex h-11 items-center rounded-md border border-slate-700 px-6 font-semibold text-slate-200"
+            >
+              View pricing
+            </a>
           </div>
         </div>
+
+        <Card className="h-fit border-slate-700">
+          <CardHeader>
+            <CardTitle>Common webhook pain</CardTitle>
+          </CardHeader>
+          <CardContent className="grid gap-3 text-sm text-slate-300">
+            <p>1. Event fires once in production and fails because of a subtle parsing bug.</p>
+            <p>2. You can’t replay the exact payload and signature locally.</p>
+            <p>3. You lose hours writing one-off curl commands and guessing headers.</p>
+            <p className="text-sky-300">Webhook Replay Toolkit captures once and replays forever.</p>
+          </CardContent>
+        </Card>
+      </header>
+
+      <section className="grid gap-4 md:grid-cols-3">
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2 text-base">
+              <ShieldCheck className="h-4 w-4 text-sky-300" /> Full request fidelity
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="text-sm text-slate-300">
+            Store method, path, query params, headers, and body exactly as received.
+          </CardContent>
+        </Card>
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2 text-base">
+              <RefreshCcw className="h-4 w-4 text-sky-300" /> Instant replay
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="text-sm text-slate-300">
+            Replay to localhost, staging, or production endpoints with one click.
+          </CardContent>
+        </Card>
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2 text-base">
+              <Zap className="h-4 w-4 text-sky-300" /> Faster debugging loop
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="text-sm text-slate-300">
+            Reproduce failures in seconds instead of waiting for new webhook events.
+          </CardContent>
+        </Card>
       </section>
 
-      <Pricing isPaid={paid} />
+      {!session ? <AuthPanel /> : null}
 
-      <section className="mx-auto max-w-3xl px-4 py-16 sm:px-6">
-        <h2 className="mb-4 text-2xl font-bold">FAQ</h2>
-        <div className="space-y-3">
-          {faqs.map((faq) => (
-            <Disclosure key={faq.q}>
-              <div className="rounded-lg border border-[#30363d] bg-[#161b22]">
-                <DisclosureButton className="flex w-full items-center justify-between px-4 py-3 text-left text-sm font-medium text-[#e6edf3]">
-                  {faq.q}
-                  <ChevronDown className="h-4 w-4" />
-                </DisclosureButton>
-                <DisclosurePanel className="px-4 pb-4 text-sm text-[#9ba5b3]">{faq.a}</DisclosurePanel>
-              </div>
-            </Disclosure>
-          ))}
-        </div>
+      <section id="pricing" className="grid gap-4 rounded-2xl border border-slate-800 bg-slate-900/40 p-6">
+        <h2 className="text-2xl font-semibold text-white">Simple pricing</h2>
+        <p className="text-slate-300">One plan for developers shipping real webhook integrations.</p>
+        <Card className="max-w-lg border-sky-400/30">
+          <CardHeader>
+            <CardTitle>Pro</CardTitle>
+          </CardHeader>
+          <CardContent className="grid gap-4 text-sm text-slate-300">
+            <p>
+              <span className="text-3xl font-bold text-white">$15</span>
+              <span className="text-slate-400"> / month</span>
+            </p>
+            <ul className="grid gap-2">
+              <li className="flex items-center gap-2"><CheckCircle2 className="h-4 w-4 text-emerald-300" /> Unlimited captures</li>
+              <li className="flex items-center gap-2"><CheckCircle2 className="h-4 w-4 text-emerald-300" /> Unlimited replays</li>
+              <li className="flex items-center gap-2"><CheckCircle2 className="h-4 w-4 text-emerald-300" /> Full headers and body history</li>
+              <li className="flex items-center gap-2"><CheckCircle2 className="h-4 w-4 text-emerald-300" /> Capture URL per account</li>
+            </ul>
+            {session && !paid ? (
+              <CheckoutButton />
+            ) : session && paid ? (
+              <Link href="/dashboard" className="text-sky-300 underline underline-offset-4">
+                Access your unlocked dashboard
+              </Link>
+            ) : (
+              <p className="text-slate-400">Create an account first, then unlock Pro in one click.</p>
+            )}
+          </CardContent>
+        </Card>
       </section>
 
-      <footer className="border-t border-[#30363d] py-8 text-center text-sm text-[#7d8590]">
-        <p className="mb-2 flex items-center justify-center gap-1"><CheckCircle2 className="h-4 w-4 text-[#3fb950]" /> Built for developers who cannot wait for the next webhook retry.</p>
-        <p className="flex items-center justify-center gap-2"><Repeat2 className="h-4 w-4" /> Webhook Replay Toolkit</p>
-      </footer>
+      <section className="grid gap-4">
+        <h2 className="text-2xl font-semibold text-white">FAQ</h2>
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-base">How do I capture webhooks?</CardTitle>
+          </CardHeader>
+          <CardContent className="text-sm text-slate-300">
+            Copy your personal capture endpoint from the dashboard and paste it in Stripe, Shopify, GitHub, Slack,
+            Resend, or Postmark webhook settings.
+          </CardContent>
+        </Card>
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-base">Will this replay exact headers and payload?</CardTitle>
+          </CardHeader>
+          <CardContent className="text-sm text-slate-300">
+            Yes. The replay endpoint reuses original method, content-type, and captured body. You can then inspect
+            replay status and response body.
+          </CardContent>
+        </Card>
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-base">Can I replay to localhost?</CardTitle>
+          </CardHeader>
+          <CardContent className="text-sm text-slate-300">
+            Yes. Point replays at local tunnels, staging URLs, or production endpoints.
+          </CardContent>
+        </Card>
+      </section>
     </main>
   );
 }

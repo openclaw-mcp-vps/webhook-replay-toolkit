@@ -11,27 +11,27 @@ NICHE: developer-tools
 PRICE: $$15/mo
 
 ARCHITECTURE SPEC:
-A Next.js app with a webhook capture proxy that records incoming webhooks to a database, then provides a web interface to browse captured webhooks and replay them to any endpoint. Uses a unique subdomain per user as the webhook URL that forwards to the capture service.
+A Next.js web app with a webhook capture proxy service that records incoming webhooks to a database, then provides a dashboard to view, filter, and replay them to any endpoint. Uses a unique subdomain per user for webhook capture URLs and stores full request data including headers, body, and metadata.
 
 PLANNED FILES:
 - app/page.tsx
 - app/dashboard/page.tsx
 - app/dashboard/webhooks/page.tsx
 - app/dashboard/webhooks/[id]/page.tsx
-- app/api/capture/[userId]/route.ts
-- app/api/replay/route.ts
 - app/api/auth/[...nextauth]/route.ts
+- app/api/webhooks/capture/[userId]/route.ts
+- app/api/webhooks/replay/route.ts
+- app/api/webhooks/route.ts
 - app/api/checkout/route.ts
+- components/WebhookList.tsx
+- components/WebhookDetails.tsx
+- components/ReplayButton.tsx
 - lib/db.ts
 - lib/auth.ts
-- lib/webhook-capture.ts
-- lib/webhook-replay.ts
-- components/webhook-list.tsx
-- components/webhook-details.tsx
-- components/replay-form.tsx
-- components/pricing.tsx
+- lib/lemonsqueezy.ts
+- prisma/schema.prisma
 
-DEPENDENCIES: next, react, typescript, tailwindcss, prisma, @prisma/client, next-auth, @next-auth/prisma-adapter, axios, date-fns, @headlessui/react, lucide-react, zod, lemonsqueezy.js
+DEPENDENCIES: next, react, typescript, tailwindcss, prisma, @prisma/client, next-auth, @next-auth/prisma-adapter, axios, date-fns, lucide-react, @lemonsqueezy/lemonsqueezy.js, zod, bcryptjs
 
 REQUIREMENTS:
 - Next.js 15 with App Router (app/ directory)
@@ -45,6 +45,8 @@ REQUIREMENTS:
 - Mobile responsive
 - SEO meta tags, Open Graph tags
 - /api/health endpoint that returns {"status":"ok"}
+- NO HEAVY ORMs: Do NOT use Prisma, Drizzle, TypeORM, Sequelize, or Mongoose. If the tool needs persistence, use direct SQL via `pg` (Postgres) or `better-sqlite3` (local), or just filesystem JSON. Reason: these ORMs require schema files and codegen steps that fail on Vercel when misconfigured.
+- INTERNAL FILE DISCIPLINE: Every internal import (paths starting with `@/`, `./`, or `../`) MUST refer to a file you actually create in this build. If you write `import { Card } from "@/components/ui/card"`, then `components/ui/card.tsx` MUST exist with a real `export const Card` (or `export default Card`). Before finishing, scan all internal imports and verify every target file exists. Do NOT use shadcn/ui patterns unless you create every component from scratch — easier path: write all UI inline in the page that uses it.
 - DEPENDENCY DISCIPLINE: Every package imported in any .ts, .tsx, .js, or .jsx file MUST be
   listed in package.json dependencies (or devDependencies for build-only). Before finishing,
   scan all source files for `import` statements and verify every external package (anything

@@ -1,12 +1,13 @@
 import { redirect } from "next/navigation";
-import { auth } from "@/lib/auth";
-import { db } from "@/lib/db";
+import { DashboardHeader } from "@/components/DashboardHeader";
+import { WebhookList } from "@/components/WebhookList";
+import { getAppSession } from "@/lib/auth";
 import { hasPaidAccess } from "@/lib/paywall";
-import { WebhookList } from "@/components/webhook-list";
+import { listWebhooks } from "@/lib/db";
 
 export default async function WebhooksPage() {
-  const session = await auth();
-  if (!session?.user?.id) {
+  const session = await getAppSession();
+  if (!session?.user?.id || !session.user.email) {
     redirect("/");
   }
 
@@ -15,15 +16,11 @@ export default async function WebhooksPage() {
     redirect("/#pricing");
   }
 
-  const webhooks = await db.webhookEvent.findMany({
-    where: { userId: session.user.id },
-    orderBy: { createdAt: "desc" },
-    take: 100
-  });
+  const webhooks = await listWebhooks(session.user.id);
 
   return (
-    <main className="mx-auto max-w-6xl px-4 py-10 sm:px-6">
-      <h1 className="mb-6 text-3xl font-bold">Captured webhooks</h1>
+    <main className="mx-auto flex min-h-screen w-full max-w-5xl flex-col gap-6 px-4 py-8 sm:px-6">
+      <DashboardHeader email={session.user.email} />
       <WebhookList webhooks={webhooks} />
     </main>
   );

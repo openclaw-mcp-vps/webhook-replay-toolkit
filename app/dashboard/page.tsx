@@ -1,91 +1,87 @@
-import Link from "next/link";
-import { headers } from "next/headers";
 import { redirect } from "next/navigation";
-import { db } from "@/lib/db";
-import { auth } from "@/lib/auth";
+import { ArrowRight } from "lucide-react";
+import { DashboardHeader } from "@/components/DashboardHeader";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { getAppSession } from "@/lib/auth";
 import { hasPaidAccess } from "@/lib/paywall";
-import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { SignOutButton } from "@/components/sign-out-button";
+import { findUserById, listWebhooks } from "@/lib/db";
 
-export default async function DashboardPage() {
-  const session = await auth();
-
-  if (!session?.user?.id) {
+export default async function DashboardPage({
+  searchParams
+}: {
+  searchParams: Promise<Record<string, string | string[] | undefined>>;
+}) {
+  const session = await getAppSession();
+  if (!session?.user?.id || !session.user.email) {
     redirect("/");
   }
 
-  const isPaid = await hasPaidAccess(session.user.id);
+  const params = await searchParams;
+  if (params.paid === "1") {
+    redirect("/api/paywall/unlock");
+  }
 
-  const [webhookCount, recentCount] = await Promise.all([
-    db.webhookEvent.count({ where: { userId: session.user.id } }),
-    db.webhookEvent.count({
-      where: {
-        userId: session.user.id,
-        createdAt: {
-          gte: new Date(Date.now() - 24 * 60 * 60 * 1000)
-        }
-      }
-    })
-  ]);
+  const paid = await hasPaidAccess(session.user.id);
+  if (!paid) {
+    redirect("/#pricing");
+  }
 
-  const requestHeaders = await headers();
-  const host = requestHeaders.get("x-forwarded-host") || requestHeaders.get("host") || process.env.NEXT_PUBLIC_APP_HOST || "localhost:3000";
+  const user = await findUserById(session.user.id);
+  if (!user) {
+    redirect("/");
+  }
+
+  const webhooks = await listWebhooks(user.id);
+  const appUrl = process.env.NEXT_PUBLIC_APP_URL ?? "http://localhost:3000";
+  const base = new URL(appUrl);
+  const wildcardCaptureUrl =
+    base.hostname === "localhost" || /^\d{1,3}(\.\d{1,3}){3}$/.test(base.hostname)
+      ? null
+      : `${base.protocol}//${user.captureSubdomain}.${base.host}/api/webhooks/capture/${user.captureSubdomain}`;
+  const pathCaptureUrl = `${appUrl}/api/webhooks/capture/${user.captureSubdomain}`;
 
   return (
-    <main className="mx-auto max-w-6xl space-y-6 px-4 py-10 sm:px-6">
-      <header className="flex flex-col justify-between gap-4 sm:flex-row sm:items-center">
-        <div>
-          <h1 className="text-3xl font-bold">Dashboard</h1>
-          <p className="text-sm text-[#9ba5b3]">Capture endpoint for your account: <span className="font-mono text-[#58a6ff]">https://{session.user.id}.{host}/api/capture/{session.user.id}</span></p>
-        </div>
-        <SignOutButton />
-      </header>
-
-      {!isPaid ? (
-        <Card className="border-[#d2992255]">
-          <CardHeader>
-            <CardTitle>Upgrade required</CardTitle>
-            <CardDescription>You can sign in for free, but replay and webhook history are part of the $15/month Pro plan.</CardDescription>
-          </CardHeader>
-          <CardContent>
-            <Button asChild>
-              <Link href="/#pricing">Unlock Pro</Link>
-            </Button>
-          </CardContent>
-        </Card>
-      ) : null}
-
-      <div className="grid gap-4 md:grid-cols-3">
-        <Card>
-          <CardHeader>
-            <CardTitle className="text-lg">Total captures</CardTitle>
-          </CardHeader>
-          <CardContent className="text-4xl font-bold text-[#3fb950]">{webhookCount}</CardContent>
-        </Card>
-        <Card>
-          <CardHeader>
-            <CardTitle className="text-lg">Last 24 hours</CardTitle>
-          </CardHeader>
-          <CardContent className="text-4xl font-bold text-[#58a6ff]">{recentCount}</CardContent>
-        </Card>
-        <Card>
-          <CardHeader>
-            <CardTitle className="text-lg">Replay status</CardTitle>
-          </CardHeader>
-          <CardContent className="text-sm text-[#9ba5b3]">{isPaid ? "Enabled for all captured events" : "Upgrade to replay captured events"}</CardContent>
-        </Card>
-      </div>
+    <main className="mx-auto flex min-h-screen w-full max-w-5xl flex-col gap-6 px-4 py-8 sm:px-6">
+      <DashboardHeader email={session.user.email} />
 
       <Card>
         <CardHeader>
-          <CardTitle>Webhook workflow</CardTitle>
-          <CardDescription>Open your captured events and replay exact payloads against local or remote environments.</CardDescription>
+          <CardTitle>Your capture endpoint</CardTitle>
         </CardHeader>
-        <CardContent>
-          <Button asChild>
-            <Link href="/dashboard/webhooks">View captured webhooks</Link>
-          </Button>
+        <CardContent className="grid gap-3 text-sm text-slate-300">
+          <p>
+            Use this URL in Stripe, Shopify, GitHub, Slack, Resend, and Postmark webhook settings. Every request is
+            recorded with full headers + body.
+          </p>
+          {wildcardCaptureUrl ? (
+            <pre className="overflow-auto rounded-md border border-slate-800 bg-slate-950 p-3 font-mono text-xs text-sky-300">
+              {wildcardCaptureUrl}
+            </pre>
+          ) : null}
+          <pre className="overflow-auto rounded-md border border-slate-800 bg-slate-950 p-3 font-mono text-xs text-sky-300">
+            {pathCaptureUrl}
+          </pre>
+          <p className="text-xs text-slate-500">
+            Use wildcard DNS in production for per-user subdomains. Path capture URL works everywhere.
+          </p>
+          <p className="text-xs text-slate-500">Assigned subdomain key: {user.captureSubdomain}</p>
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle>Latest activity</CardTitle>
+        </CardHeader>
+        <CardContent className="grid gap-2 text-sm text-slate-300">
+          <p>
+            Captured events: <span className="font-semibold text-white">{webhooks.length}</span>
+          </p>
+          <a
+            className="inline-flex items-center gap-2 text-sky-300 underline underline-offset-4"
+            href="/dashboard/webhooks"
+          >
+            Open captures <ArrowRight className="h-4 w-4" />
+          </a>
         </CardContent>
       </Card>
     </main>

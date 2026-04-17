@@ -1,56 +1,72 @@
-import { PrismaAdapter } from "@next-auth/prisma-adapter";
+import "server-only";
+
+import type { NextAuthOptions } from "next-auth";
+import { getServerSession } from "next-auth";
 import CredentialsProvider from "next-auth/providers/credentials";
-import { type NextAuthOptions, getServerSession } from "next-auth";
-import { db } from "@/lib/db";
+import { compare } from "bcryptjs";
+import { z } from "zod";
+import { findUserByEmail } from "@/lib/db";
+
+const credentialsSchema = z.object({
+  email: z.string().email(),
+  password: z.string().min(8)
+});
 
 export const authOptions: NextAuthOptions = {
-  adapter: PrismaAdapter(db),
   session: {
-    strategy: "database"
-  },
-  pages: {
-    signIn: "/"
+    strategy: "jwt"
   },
   providers: [
     CredentialsProvider({
-      name: "Email",
+      name: "Credentials",
       credentials: {
         email: { label: "Email", type: "email" },
-        name: { label: "Name", type: "text" }
+        password: { label: "Password", type: "password" }
       },
-      async authorize(credentials) {
-        const email = credentials?.email?.trim().toLowerCase();
-        const name = credentials?.name?.trim();
-
-        if (!email) {
+      async authorize(rawCredentials) {
+        const parsed = credentialsSchema.safeParse(rawCredentials);
+        if (!parsed.success) {
           return null;
         }
 
-        const user = await db.user.upsert({
-          where: { email },
-          create: { email, name: name || email.split("@")[0] },
-          update: { name: name || undefined }
-        });
+        const user = await findUserByEmail(parsed.data.email);
+        if (!user) {
+          return null;
+        }
+
+        const ok = await compare(parsed.data.password, user.passwordHash);
+        if (!ok) {
+          return null;
+        }
 
         return {
           id: user.id,
-          name: user.name,
           email: user.email,
-          image: user.image
+          name: user.name
         };
       }
     })
   ],
+  pages: {
+    signIn: "/"
+  },
   callbacks: {
-    async session({ session, user }) {
+    async jwt({ token, user }) {
+      if (user) {
+        token.userId = user.id;
+      }
+      return token;
+    },
+    async session({ session, token }) {
       if (session.user) {
-        session.user.id = user.id;
+        session.user.id = token.userId as string;
       }
       return session;
     }
-  }
+  },
+  secret: process.env.NEXTAUTH_SECRET ?? "dev-secret-change-me"
 };
 
-export function auth() {
+export function getAppSession() {
   return getServerSession(authOptions);
 }
