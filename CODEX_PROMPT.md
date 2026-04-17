@@ -11,27 +11,26 @@ NICHE: developer-tools
 PRICE: $$15/mo
 
 ARCHITECTURE SPEC:
-A Next.js web app with a webhook capture proxy service that records incoming webhooks to a database, then provides a dashboard to view, filter, and replay them to any endpoint. Uses a unique subdomain per user for webhook capture URLs and stores full request data including headers, body, and metadata.
+A Next.js web app with a webhook capture proxy service that records incoming webhooks to a database, then provides a dashboard to view, filter, and replay them to any endpoint. Uses a unique subdomain per user for webhook capture and stores full request data including headers, body, and metadata.
 
 PLANNED FILES:
 - app/page.tsx
 - app/dashboard/page.tsx
 - app/dashboard/webhooks/page.tsx
 - app/dashboard/webhooks/[id]/page.tsx
-- app/api/auth/[...nextauth]/route.ts
 - app/api/webhooks/capture/[userId]/route.ts
 - app/api/webhooks/replay/route.ts
-- app/api/webhooks/route.ts
-- app/api/checkout/route.ts
-- components/WebhookList.tsx
-- components/WebhookDetails.tsx
-- components/ReplayButton.tsx
+- app/api/auth/[...nextauth]/route.ts
+- app/api/lemonsqueezy/webhook/route.ts
 - lib/db.ts
 - lib/auth.ts
 - lib/lemonsqueezy.ts
+- components/webhook-list.tsx
+- components/webhook-replay-form.tsx
+- components/pricing-table.tsx
 - prisma/schema.prisma
 
-DEPENDENCIES: next, react, typescript, tailwindcss, prisma, @prisma/client, next-auth, @next-auth/prisma-adapter, axios, date-fns, lucide-react, @lemonsqueezy/lemonsqueezy.js, zod, bcryptjs
+DEPENDENCIES: next, react, typescript, tailwindcss, prisma, @prisma/client, next-auth, @next-auth/prisma-adapter, postgres, @lemonsqueezy/lemonsqueezy.js, axios, date-fns, lucide-react, @headlessui/react, react-hook-form, zod
 
 REQUIREMENTS:
 - Next.js 15 with App Router (app/ directory)

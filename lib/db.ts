@@ -1,119 +1,92 @@
-import "server-only";
+import { Pool } from "pg";
 
-import { randomUUID } from "crypto";
-import { mkdir, readFile, writeFile } from "fs/promises";
-import path from "path";
-import type { AppUser, CapturedWebhook, ReplayLog, StoreData } from "@/lib/types";
+const connectionString = process.env.DATABASE_URL;
 
-const DATA_DIR = path.join(process.cwd(), "data");
-const STORE_PATH = path.join(DATA_DIR, "store.json");
-
-let writeQueue: Promise<void> = Promise.resolve();
-
-async function ensureStore(): Promise<void> {
-  await mkdir(DATA_DIR, { recursive: true });
-  try {
-    await readFile(STORE_PATH, "utf-8");
-  } catch {
-    const initial: StoreData = { users: [], webhooks: [], replayLogs: [] };
-    await writeFile(STORE_PATH, JSON.stringify(initial, null, 2));
-  }
+if (!connectionString) {
+  // eslint-disable-next-line no-console
+  console.warn("DATABASE_URL is not set. API routes that use persistence will fail until it is configured.");
 }
 
-export async function readStore(): Promise<StoreData> {
-  await ensureStore();
-  const raw = await readFile(STORE_PATH, "utf-8");
-  return JSON.parse(raw) as StoreData;
-}
+const globalForDb = globalThis as unknown as {
+  pool?: Pool;
+  initPromise?: Promise<void>;
+};
 
-export async function writeStore(mutator: (data: StoreData) => StoreData): Promise<void> {
-  writeQueue = writeQueue.then(async () => {
-    const current = await readStore();
-    const updated = mutator(current);
-    await writeFile(STORE_PATH, JSON.stringify(updated, null, 2));
+export const pool =
+  globalForDb.pool ??
+  new Pool({
+    connectionString,
+    ssl: process.env.NODE_ENV === "production" ? { rejectUnauthorized: false } : undefined,
   });
 
-  await writeQueue;
+if (!globalForDb.pool) {
+  globalForDb.pool = pool;
 }
 
-export async function createUser(params: {
-  email: string;
-  name: string;
-  passwordHash: string;
-  captureSubdomain: string;
-}): Promise<AppUser> {
-  const user: AppUser = {
-    id: randomUUID(),
-    email: params.email.toLowerCase(),
-    name: params.name,
-    passwordHash: params.passwordHash,
-    captureSubdomain: params.captureSubdomain,
-    createdAt: new Date().toISOString()
-  };
+async function initSchema() {
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS users (
+      id TEXT PRIMARY KEY,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
 
-  await writeStore((data) => ({ ...data, users: [user, ...data.users] }));
-  return user;
+    CREATE TABLE IF NOT EXISTS subscriptions (
+      user_id TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+      status TEXT NOT NULL,
+      order_id TEXT,
+      customer_email TEXT,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+
+    CREATE TABLE IF NOT EXISTS webhooks (
+      id TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      provider TEXT NOT NULL,
+      method TEXT NOT NULL,
+      path TEXT NOT NULL,
+      query_string TEXT,
+      headers JSONB NOT NULL,
+      body TEXT NOT NULL,
+      content_type TEXT,
+      body_size INTEGER NOT NULL,
+      received_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+
+    CREATE TABLE IF NOT EXISTS replays (
+      id TEXT PRIMARY KEY,
+      webhook_id TEXT NOT NULL REFERENCES webhooks(id) ON DELETE CASCADE,
+      user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      target_url TEXT NOT NULL,
+      status_code INTEGER,
+      response_headers JSONB,
+      response_body TEXT,
+      duration_ms INTEGER,
+      error TEXT,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_webhooks_user_received_at ON webhooks(user_id, received_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_replays_webhook_created_at ON replays(webhook_id, created_at DESC);
+  `);
 }
 
-export async function findUserByEmail(email: string): Promise<AppUser | null> {
-  const store = await readStore();
-  return store.users.find((u) => u.email === email.toLowerCase()) ?? null;
+export async function ensureDb() {
+  if (!connectionString) {
+    throw new Error("DATABASE_URL is required");
+  }
+
+  if (!globalForDb.initPromise) {
+    globalForDb.initPromise = initSchema();
+  }
+
+  await globalForDb.initPromise;
 }
 
-export async function findUserById(userId: string): Promise<AppUser | null> {
-  const store = await readStore();
-  return store.users.find((u) => u.id === userId) ?? null;
-}
-
-export async function findUserByCaptureIdentifier(identifier: string): Promise<AppUser | null> {
-  const store = await readStore();
-  return (
-    store.users.find((u) => u.id === identifier || u.captureSubdomain === identifier.toLowerCase()) ?? null
+export async function ensureUser(userId: string) {
+  await ensureDb();
+  await pool.query(
+    `INSERT INTO users (id) VALUES ($1)
+     ON CONFLICT (id) DO NOTHING`,
+    [userId],
   );
-}
-
-export async function saveWebhook(
-  payload: Omit<CapturedWebhook, "id" | "receivedAt">
-): Promise<CapturedWebhook> {
-  const webhook: CapturedWebhook = {
-    ...payload,
-    id: randomUUID(),
-    receivedAt: new Date().toISOString()
-  };
-
-  await writeStore((data) => ({ ...data, webhooks: [webhook, ...data.webhooks] }));
-  return webhook;
-}
-
-export async function listWebhooks(userId: string): Promise<CapturedWebhook[]> {
-  const store = await readStore();
-  return store.webhooks
-    .filter((w) => w.userId === userId)
-    .sort((a, b) => (a.receivedAt < b.receivedAt ? 1 : -1));
-}
-
-export async function getWebhookById(
-  userId: string,
-  webhookId: string
-): Promise<CapturedWebhook | null> {
-  const store = await readStore();
-  return store.webhooks.find((w) => w.userId === userId && w.id === webhookId) ?? null;
-}
-
-export async function addReplayLog(log: Omit<ReplayLog, "id" | "createdAt">): Promise<ReplayLog> {
-  const replay: ReplayLog = {
-    ...log,
-    id: randomUUID(),
-    createdAt: new Date().toISOString()
-  };
-
-  await writeStore((data) => ({ ...data, replayLogs: [replay, ...data.replayLogs] }));
-  return replay;
-}
-
-export async function listReplayLogs(userId: string, webhookId?: string): Promise<ReplayLog[]> {
-  const store = await readStore();
-  return store.replayLogs
-    .filter((r) => r.userId === userId && (!webhookId || r.webhookId === webhookId))
-    .sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1));
 }

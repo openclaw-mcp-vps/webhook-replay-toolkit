@@ -1,77 +1,58 @@
+import { randomUUID } from "node:crypto";
 import { NextResponse } from "next/server";
-import { findUserByCaptureIdentifier, saveWebhook } from "@/lib/db";
+import { ensureDb, ensureUser, pool } from "@/lib/db";
 
-export const dynamic = "force-dynamic";
-
-function detectSource(headers: Record<string, string>): "stripe" | "shopify" | "github" | "unknown" {
-  if (headers["stripe-signature"]) return "stripe";
-  if (headers["x-shopify-topic"] || headers["x-shopify-hmac-sha256"]) return "shopify";
-  if (headers["x-github-event"] || headers["x-hub-signature-256"]) return "github";
+function inferProvider(headers: Headers) {
+  if (headers.get("stripe-signature")) return "stripe";
+  if (headers.get("x-shopify-hmac-sha256")) return "shopify";
+  if (headers.get("x-github-event")) return "github";
+  if (headers.get("x-slack-signature")) return "slack";
+  if (headers.get("x-postmark-signature")) return "postmark";
+  if (headers.get("x-resend-signature")) return "resend";
   return "unknown";
 }
 
-async function capture(request: Request, captureIdentifier: string) {
-  const user = await findUserByCaptureIdentifier(captureIdentifier);
-  if (!user) {
-    return NextResponse.json({ error: "Invalid capture URL." }, { status: 404 });
-  }
+async function capture(req: Request, { params }: { params: Promise<{ userId: string }> }) {
+  const { userId } = await params;
+  const requestId = randomUUID();
+  const body = await req.text();
+  const parsedUrl = new URL(req.url);
 
-  const arrayBuffer = await request.arrayBuffer();
-  const buffer = Buffer.from(arrayBuffer);
+  const headers = Object.fromEntries(req.headers.entries());
+  const provider = inferProvider(req.headers);
+  const contentType = req.headers.get("content-type");
 
-  const contentType = request.headers.get("content-type") ?? "application/octet-stream";
-  const isTextLike =
-    contentType.includes("json") ||
-    contentType.includes("text") ||
-    contentType.includes("xml") ||
-    contentType.includes("x-www-form-urlencoded");
+  await ensureDb();
+  await ensureUser(userId);
 
-  const headers = Object.fromEntries(
-    Array.from(request.headers.entries()).map(([k, v]) => [k.toLowerCase(), v])
+  await pool.query(
+    `INSERT INTO webhooks (id, user_id, provider, method, path, query_string, headers, body, content_type, body_size)
+     VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8, $9, $10)`,
+    [
+      requestId,
+      userId,
+      provider,
+      req.method,
+      parsedUrl.pathname,
+      parsedUrl.searchParams.toString() || null,
+      JSON.stringify(headers),
+      body,
+      contentType,
+      Buffer.byteLength(body, "utf8"),
+    ],
   );
 
-  const query = Object.fromEntries(new URL(request.url).searchParams.entries());
-
-  const bodyText = isTextLike ? buffer.toString("utf-8") : "";
-
-  await saveWebhook({
-    userId: user.id,
-    method: request.method,
-    path: new URL(request.url).pathname,
-    query,
-    headers,
-    bodyText,
-    bodyBase64: !isTextLike ? buffer.toString("base64") : undefined,
-    sourceHint: detectSource(headers),
-    contentType,
-    ipAddress:
-      request.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ?? request.headers.get("x-real-ip") ?? "unknown"
+  return NextResponse.json({
+    ok: true,
+    id: requestId,
+    provider,
+    capturedAt: new Date().toISOString(),
   });
-
-  return NextResponse.json({ ok: true });
 }
 
-export async function POST(request: Request, context: { params: Promise<{ userId: string }> }) {
-  const { userId } = await context.params;
-  return capture(request, userId);
-}
-
-export async function GET(request: Request, context: { params: Promise<{ userId: string }> }) {
-  const { userId } = await context.params;
-  return capture(request, userId);
-}
-
-export async function PUT(request: Request, context: { params: Promise<{ userId: string }> }) {
-  const { userId } = await context.params;
-  return capture(request, userId);
-}
-
-export async function PATCH(request: Request, context: { params: Promise<{ userId: string }> }) {
-  const { userId } = await context.params;
-  return capture(request, userId);
-}
-
-export async function DELETE(request: Request, context: { params: Promise<{ userId: string }> }) {
-  const { userId } = await context.params;
-  return capture(request, userId);
-}
+export const GET = capture;
+export const POST = capture;
+export const PUT = capture;
+export const PATCH = capture;
+export const DELETE = capture;
+export const OPTIONS = capture;

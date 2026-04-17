@@ -1,61 +1,62 @@
 import Link from "next/link";
 import { formatDistanceToNow } from "date-fns";
-import { Badge } from "@/components/ui/badge";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { ArrowUpRight } from "lucide-react";
 
-type WebhookListItem = {
+export type WebhookItem = {
   id: string;
-  source: string;
+  provider: string;
   method: string;
   path: string;
-  bodySize: number;
-  replayCount: number;
-  createdAt: Date;
+  body_size: number;
+  received_at: string;
 };
 
 type WebhookListProps = {
-  webhooks: WebhookListItem[];
+  webhooks: WebhookItem[];
 };
 
 export function WebhookList({ webhooks }: WebhookListProps) {
+  if (webhooks.length === 0) {
+    return (
+      <div className="rounded-xl border border-dashed border-[#30363d] bg-[#161b22] p-8 text-center text-sm text-[#8b949e]">
+        No webhooks captured yet. Point Stripe, Shopify, or GitHub at your capture URL and refresh.
+      </div>
+    );
+  }
+
   return (
-    <Card>
-      <CardHeader>
-        <CardTitle>Captured webhooks</CardTitle>
-      </CardHeader>
-      <CardContent className="overflow-x-auto">
-        <Table>
-          <TableHeader>
-            <TableRow>
-              <TableHead>Source</TableHead>
-              <TableHead>Method</TableHead>
-              <TableHead>Path</TableHead>
-              <TableHead>Body</TableHead>
-              <TableHead>Replays</TableHead>
-              <TableHead>Captured</TableHead>
-            </TableRow>
-          </TableHeader>
-          <TableBody>
-            {webhooks.map((webhook) => (
-              <TableRow key={webhook.id}>
-                <TableCell>
-                  <Badge>{webhook.source}</Badge>
-                </TableCell>
-                <TableCell>{webhook.method}</TableCell>
-                <TableCell>
-                  <Link href={`/dashboard/webhooks/${webhook.id}`} className="text-[#58a6ff] hover:underline">
-                    {webhook.path || "/"}
-                  </Link>
-                </TableCell>
-                <TableCell>{(webhook.bodySize / 1024).toFixed(1)} KB</TableCell>
-                <TableCell>{webhook.replayCount}</TableCell>
-                <TableCell>{formatDistanceToNow(webhook.createdAt, { addSuffix: true })}</TableCell>
-              </TableRow>
-            ))}
-          </TableBody>
-        </Table>
-      </CardContent>
-    </Card>
+    <div className="overflow-hidden rounded-xl border border-[#30363d]">
+      <table className="min-w-full divide-y divide-[#30363d] bg-[#161b22] text-sm">
+        <thead className="bg-[#0d1117] text-left text-[#8b949e]">
+          <tr>
+            <th className="px-4 py-3 font-medium">Provider</th>
+            <th className="px-4 py-3 font-medium">Request</th>
+            <th className="px-4 py-3 font-medium">Payload</th>
+            <th className="px-4 py-3 font-medium">Captured</th>
+            <th className="px-4 py-3 font-medium">Action</th>
+          </tr>
+        </thead>
+        <tbody className="divide-y divide-[#30363d] text-[#c9d1d9]">
+          {webhooks.map((webhook) => (
+            <tr key={webhook.id}>
+              <td className="px-4 py-3 capitalize">{webhook.provider}</td>
+              <td className="px-4 py-3">
+                <span className="mr-2 rounded bg-[#1f6feb]/20 px-2 py-1 text-xs uppercase text-[#58a6ff]">
+                  {webhook.method}
+                </span>
+                {webhook.path}
+              </td>
+              <td className="px-4 py-3">{(webhook.body_size / 1024).toFixed(1)} KB</td>
+              <td className="px-4 py-3">{formatDistanceToNow(new Date(webhook.received_at), { addSuffix: true })}</td>
+              <td className="px-4 py-3">
+                <Link href={`/dashboard/webhooks/${webhook.id}`} className="inline-flex items-center gap-1 text-[#58a6ff] hover:underline">
+                  Inspect <ArrowUpRight className="h-3.5 w-3.5" />
+                </Link>
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
   );
 }

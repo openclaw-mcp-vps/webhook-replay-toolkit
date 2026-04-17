@@ -1,89 +1,69 @@
-import { redirect } from "next/navigation";
-import { ArrowRight } from "lucide-react";
-import { DashboardHeader } from "@/components/DashboardHeader";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { getAppSession } from "@/lib/auth";
-import { hasPaidAccess } from "@/lib/paywall";
-import { findUserById, listWebhooks } from "@/lib/db";
+import Link from "next/link";
+import { cookies } from "next/headers";
+import { requirePaidAccess } from "@/lib/auth";
+import { USER_COOKIE } from "@/lib/constants";
+import { ensureDb, ensureUser, pool } from "@/lib/db";
 
-export default async function DashboardPage({
-  searchParams
-}: {
-  searchParams: Promise<Record<string, string | string[] | undefined>>;
-}) {
-  const session = await getAppSession();
-  if (!session?.user?.id || !session.user.email) {
-    redirect("/");
+export default async function DashboardPage() {
+  await requirePaidAccess();
+
+  const store = await cookies();
+  const userId = store.get(USER_COOKIE)?.value;
+
+  if (!userId) {
+    return null;
   }
 
-  const params = await searchParams;
-  if (params.paid === "1") {
-    redirect("/api/paywall/unlock");
-  }
+  await ensureDb();
+  await ensureUser(userId);
 
-  const paid = await hasPaidAccess(session.user.id);
-  if (!paid) {
-    redirect("/#pricing");
-  }
+  const [webhookCountRes, replayCountRes] = await Promise.all([
+    pool.query<{ total: string }>("SELECT COUNT(*)::text AS total FROM webhooks WHERE user_id = $1", [userId]),
+    pool.query<{ total: string }>("SELECT COUNT(*)::text AS total FROM replays WHERE user_id = $1", [userId]),
+  ]);
 
-  const user = await findUserById(session.user.id);
-  if (!user) {
-    redirect("/");
-  }
-
-  const webhooks = await listWebhooks(user.id);
-  const appUrl = process.env.NEXT_PUBLIC_APP_URL ?? "http://localhost:3000";
-  const base = new URL(appUrl);
-  const wildcardCaptureUrl =
-    base.hostname === "localhost" || /^\d{1,3}(\.\d{1,3}){3}$/.test(base.hostname)
-      ? null
-      : `${base.protocol}//${user.captureSubdomain}.${base.host}/api/webhooks/capture/${user.captureSubdomain}`;
-  const pathCaptureUrl = `${appUrl}/api/webhooks/capture/${user.captureSubdomain}`;
+  const webhookCount = Number.parseInt(webhookCountRes.rows[0]?.total ?? "0", 10);
+  const replayCount = Number.parseInt(replayCountRes.rows[0]?.total ?? "0", 10);
 
   return (
-    <main className="mx-auto flex min-h-screen w-full max-w-5xl flex-col gap-6 px-4 py-8 sm:px-6">
-      <DashboardHeader email={session.user.email} />
+    <main className="mx-auto flex min-h-screen w-full max-w-6xl flex-col gap-8 px-6 py-10">
+      <header className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+        <div>
+          <h1 className="text-3xl font-bold text-[#f0f6fc]">Dashboard</h1>
+          <p className="text-sm text-[#8b949e]">Capture URL is unique per workspace user cookie: {userId}</p>
+        </div>
+        <Link
+          href="/dashboard/webhooks"
+          className="w-fit rounded-md bg-[#238636] px-4 py-2 text-sm font-medium text-white hover:bg-[#2ea043]"
+        >
+          View captured webhooks
+        </Link>
+      </header>
 
-      <Card>
-        <CardHeader>
-          <CardTitle>Your capture endpoint</CardTitle>
-        </CardHeader>
-        <CardContent className="grid gap-3 text-sm text-slate-300">
-          <p>
-            Use this URL in Stripe, Shopify, GitHub, Slack, Resend, and Postmark webhook settings. Every request is
-            recorded with full headers + body.
-          </p>
-          {wildcardCaptureUrl ? (
-            <pre className="overflow-auto rounded-md border border-slate-800 bg-slate-950 p-3 font-mono text-xs text-sky-300">
-              {wildcardCaptureUrl}
-            </pre>
-          ) : null}
-          <pre className="overflow-auto rounded-md border border-slate-800 bg-slate-950 p-3 font-mono text-xs text-sky-300">
-            {pathCaptureUrl}
-          </pre>
-          <p className="text-xs text-slate-500">
-            Use wildcard DNS in production for per-user subdomains. Path capture URL works everywhere.
-          </p>
-          <p className="text-xs text-slate-500">Assigned subdomain key: {user.captureSubdomain}</p>
-        </CardContent>
-      </Card>
+      <section className="grid gap-4 md:grid-cols-3">
+        <article className="rounded-xl border border-[#30363d] bg-[#161b22] p-5">
+          <p className="text-sm text-[#8b949e]">Captured events</p>
+          <p className="mt-2 text-3xl font-bold text-[#f0f6fc]">{webhookCount}</p>
+        </article>
+        <article className="rounded-xl border border-[#30363d] bg-[#161b22] p-5">
+          <p className="text-sm text-[#8b949e]">Replay attempts</p>
+          <p className="mt-2 text-3xl font-bold text-[#f0f6fc]">{replayCount}</p>
+        </article>
+        <article className="rounded-xl border border-[#30363d] bg-[#161b22] p-5">
+          <p className="text-sm text-[#8b949e]">Capture endpoint</p>
+          <p className="mt-2 break-all font-mono text-xs text-[#58a6ff]">/api/webhooks/capture/{userId}</p>
+        </article>
+      </section>
 
-      <Card>
-        <CardHeader>
-          <CardTitle>Latest activity</CardTitle>
-        </CardHeader>
-        <CardContent className="grid gap-2 text-sm text-slate-300">
-          <p>
-            Captured events: <span className="font-semibold text-white">{webhooks.length}</span>
-          </p>
-          <a
-            className="inline-flex items-center gap-2 text-sky-300 underline underline-offset-4"
-            href="/dashboard/webhooks"
-          >
-            Open captures <ArrowRight className="h-4 w-4" />
-          </a>
-        </CardContent>
-      </Card>
+      <section className="rounded-xl border border-[#30363d] bg-[#161b22] p-6">
+        <h2 className="text-lg font-semibold text-[#f0f6fc]">Setup in under 2 minutes</h2>
+        <ol className="mt-4 list-decimal space-y-2 pl-5 text-sm text-[#c9d1d9]">
+          <li>Copy your capture URL from above.</li>
+          <li>Paste it in Stripe, Shopify, GitHub, or Slack webhook settings.</li>
+          <li>Trigger one event in production.</li>
+          <li>Open that event in the webhooks tab and replay it to your target endpoint.</li>
+        </ol>
+      </section>
     </main>
   );
 }

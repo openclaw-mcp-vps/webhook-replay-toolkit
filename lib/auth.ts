@@ -1,72 +1,59 @@
-import "server-only";
-
 import type { NextAuthOptions } from "next-auth";
-import { getServerSession } from "next-auth";
 import CredentialsProvider from "next-auth/providers/credentials";
-import { compare } from "bcryptjs";
-import { z } from "zod";
-import { findUserByEmail } from "@/lib/db";
-
-const credentialsSchema = z.object({
-  email: z.string().email(),
-  password: z.string().min(8)
-});
+import { cookies } from "next/headers";
+import { redirect } from "next/navigation";
+import { randomUUID } from "node:crypto";
+import { PAID_COOKIE, USER_COOKIE } from "@/lib/constants";
 
 export const authOptions: NextAuthOptions = {
-  session: {
-    strategy: "jwt"
-  },
+  session: { strategy: "jwt" },
+  pages: { signIn: "/" },
   providers: [
     CredentialsProvider({
-      name: "Credentials",
+      name: "Access Code",
       credentials: {
-        email: { label: "Email", type: "email" },
-        password: { label: "Password", type: "password" }
+        code: { label: "Access Code", type: "password" },
       },
-      async authorize(rawCredentials) {
-        const parsed = credentialsSchema.safeParse(rawCredentials);
-        if (!parsed.success) {
+      async authorize(credentials) {
+        const expected = process.env.DEMO_ACCESS_CODE;
+        if (!expected || credentials?.code !== expected) {
           return null;
         }
 
-        const user = await findUserByEmail(parsed.data.email);
-        if (!user) {
-          return null;
-        }
-
-        const ok = await compare(parsed.data.password, user.passwordHash);
-        if (!ok) {
-          return null;
-        }
-
-        return {
-          id: user.id,
-          email: user.email,
-          name: user.name
-        };
-      }
-    })
+        return { id: "demo-user", name: "Demo User" };
+      },
+    }),
   ],
-  pages: {
-    signIn: "/"
-  },
-  callbacks: {
-    async jwt({ token, user }) {
-      if (user) {
-        token.userId = user.id;
-      }
-      return token;
-    },
-    async session({ session, token }) {
-      if (session.user) {
-        session.user.id = token.userId as string;
-      }
-      return session;
-    }
-  },
-  secret: process.env.NEXTAUTH_SECRET ?? "dev-secret-change-me"
 };
 
-export function getAppSession() {
-  return getServerSession(authOptions);
+export async function getOrCreateUserId() {
+  const store = await cookies();
+  const existing = store.get(USER_COOKIE)?.value;
+
+  if (existing) {
+    return existing;
+  }
+
+  const generated = randomUUID();
+  store.set(USER_COOKIE, generated, {
+    httpOnly: true,
+    sameSite: "lax",
+    secure: process.env.NODE_ENV === "production",
+    maxAge: 60 * 60 * 24 * 365,
+    path: "/",
+  });
+
+  return generated;
+}
+
+export async function hasPaidAccess() {
+  const store = await cookies();
+  return store.get(PAID_COOKIE)?.value === "1";
+}
+
+export async function requirePaidAccess() {
+  const paid = await hasPaidAccess();
+  if (!paid) {
+    redirect("/?upgrade=1");
+  }
 }
