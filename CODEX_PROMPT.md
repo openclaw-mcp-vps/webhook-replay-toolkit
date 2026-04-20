@@ -22,15 +22,16 @@ PLANNED FILES:
 - app/api/webhooks/capture/[userId]/route.ts
 - app/api/webhooks/replay/route.ts
 - app/api/checkout/route.ts
-- components/webhook-list.tsx
-- components/webhook-detail.tsx
-- components/replay-form.tsx
-- lib/database.ts
+- lib/db.ts
 - lib/auth.ts
-- lib/lemonsqueezy.ts
-- middleware.ts
+- lib/webhook-proxy.ts
+- components/WebhookList.tsx
+- components/WebhookDetails.tsx
+- components/ReplayModal.tsx
+- components/PricingCard.tsx
+- prisma/schema.prisma
 
-DEPENDENCIES: next, react, tailwindcss, prisma, @prisma/client, next-auth, @next-auth/prisma-adapter, lemonsqueezy.js, axios, date-fns, lucide-react, recharts, zod
+DEPENDENCIES: next, react, tailwindcss, @prisma/client, prisma, next-auth, @auth/prisma-adapter, lemonsqueezy.js, axios, date-fns, lucide-react, @headlessui/react, clsx, zod
 
 REQUIREMENTS:
 - Next.js 15 with App Router (app/ directory)
@@ -70,8 +71,3 @@ After creating all files:
 
 Do NOT use placeholder text. Write real, helpful content for the landing page
 and the tool itself. The tool should actually work and provide value.
-
-
-PREVIOUS ATTEMPT FAILED WITH:
-Codex timed out after 600s
-Please fix the above errors and regenerate.

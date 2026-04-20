@@ -1,50 +1,95 @@
+import { createHmac, timingSafeEqual } from "node:crypto";
 import { NextResponse } from "next/server";
-import { ensureDb, ensureUser, pool } from "@/lib/db";
-import { inferSubscriptionState, type LemonWebhookPayload, verifyLemonSignature } from "@/lib/lemonsqueezy";
+import { setPaymentStatus } from "@/lib/db";
 
-export async function POST(req: Request) {
-  const rawBody = await req.text();
-  const signature = req.headers.get("x-signature");
+type LemonWebhookPayload = {
+  meta?: {
+    event_name?: string;
+    custom_data?: {
+      user_id?: string;
+    };
+  };
+  data?: {
+    id?: string;
+    attributes?: {
+      custom_data?: {
+        user_id?: string;
+      };
+      status?: string;
+      user_email?: string;
+    };
+  };
+};
+
+function verifyLemonSignature(rawBody: string, signatureHeader: string): boolean {
+  const secret = process.env.LEMON_SQUEEZY_WEBHOOK_SECRET;
+
+  if (!secret) {
+    return false;
+  }
+
+  const expected = createHmac("sha256", secret).update(rawBody).digest("hex");
+
+  try {
+    return timingSafeEqual(Buffer.from(signatureHeader), Buffer.from(expected));
+  } catch {
+    return false;
+  }
+}
+
+function mapEventToStatus(eventName: string): "active" | "inactive" | "past_due" {
+  if (
+    eventName === "subscription_created" ||
+    eventName === "subscription_resumed" ||
+    eventName === "subscription_payment_success" ||
+    eventName === "subscription_payment_recovered" ||
+    eventName === "order_created"
+  ) {
+    return "active";
+  }
+
+  if (eventName === "subscription_payment_failed") {
+    return "past_due";
+  }
+
+  return "inactive";
+}
+
+export async function POST(request: Request) {
+  const signature = request.headers.get("x-signature");
+
+  if (!signature) {
+    return NextResponse.json(
+      { error: "Missing Lemon Squeezy signature" },
+      { status: 401 }
+    );
+  }
+
+  const rawBody = await request.text();
 
   if (!verifyLemonSignature(rawBody, signature)) {
     return NextResponse.json({ error: "Invalid signature" }, { status: 401 });
   }
 
-  const payload = JSON.parse(rawBody) as LemonWebhookPayload;
-  const eventName = payload.meta?.event_name;
+  let payload: LemonWebhookPayload;
 
-  if (!eventName) {
-    return NextResponse.json({ error: "Missing event name" }, { status: 400 });
+  try {
+    payload = JSON.parse(rawBody) as LemonWebhookPayload;
+  } catch {
+    return NextResponse.json({ error: "Invalid JSON payload" }, { status: 400 });
   }
-
+  const eventName = payload.meta?.event_name ?? "";
   const userId =
-    payload.meta?.custom_data?.user_id ?? payload.data?.attributes?.custom_data?.user_id ?? payload.data?.id ?? null;
+    payload.meta?.custom_data?.user_id ||
+    payload.data?.attributes?.custom_data?.user_id;
 
-  if (!userId) {
-    return NextResponse.json({ error: "Missing user mapping" }, { status: 400 });
+  if (userId) {
+    await setPaymentStatus({
+      userId,
+      status: mapEventToStatus(eventName),
+      orderId: payload.data?.id ?? null
+    });
   }
 
-  const state = inferSubscriptionState(eventName, payload);
-  if (state === "unknown") {
-    return NextResponse.json({ received: true });
-  }
-
-  await ensureDb();
-  await ensureUser(userId);
-
-  const orderId = payload.data?.id ?? null;
-  const email = payload.data?.attributes?.user_email ?? payload.data?.attributes?.customer_email ?? null;
-
-  await pool.query(
-    `INSERT INTO subscriptions (user_id, status, order_id, customer_email, updated_at)
-     VALUES ($1, $2, $3, $4, NOW())
-     ON CONFLICT (user_id)
-     DO UPDATE SET status = EXCLUDED.status,
-                   order_id = EXCLUDED.order_id,
-                   customer_email = EXCLUDED.customer_email,
-                   updated_at = NOW()`,
-    [userId, state, orderId, email],
-  );
-
-  return NextResponse.json({ received: true, state });
+  return NextResponse.json({ received: true });
 }

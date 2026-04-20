@@ -1,45 +1,81 @@
-import { redirect } from "next/navigation";
-import { auth } from "@/lib/auth";
-import { listWebhooks } from "@/lib/database";
-import { WebhookList } from "@/components/webhook-list";
+import { getServerAuthSession } from "@/lib/auth";
+import { listWebhooksByUser } from "@/lib/db";
+import { WebhookList } from "@/components/WebhookList";
+
+export const metadata = {
+  title: "Webhook Events"
+};
+
+type SearchParamValue = string | string[] | undefined;
+
+function toSingle(value: SearchParamValue): string | undefined {
+  return Array.isArray(value) ? value[0] : value;
+}
 
 export default async function WebhooksPage({
   searchParams
 }: {
-  searchParams: Promise<{ provider?: string; q?: string }>;
+  searchParams: Promise<Record<string, SearchParamValue>>;
 }) {
-  const session = await auth();
+  const [session, params] = await Promise.all([
+    getServerAuthSession(),
+    searchParams
+  ]);
+
   if (!session?.user?.id) {
-    redirect("/");
+    return null;
   }
 
-  const params = await searchParams;
-  const webhooks = listWebhooks(session.user.id, { provider: params.provider, search: params.q });
+  const provider = toSingle(params.provider) || "all";
+  const search = toSingle(params.q) || "";
+
+  const webhooks = await listWebhooksByUser(session.user.id, {
+    provider,
+    search,
+    limit: 150
+  });
 
   return (
-    <div className="space-y-5">
-      <h1 className="text-2xl font-semibold tracking-tight">Captured webhooks</h1>
-      <form className="grid gap-3 rounded-lg border border-[var(--border)] bg-[var(--surface)] p-4 sm:grid-cols-[160px_1fr_auto]">
+    <div className="space-y-6">
+      <div>
+        <h1 className="text-2xl font-bold text-white">Webhook Timeline</h1>
+        <p className="mt-2 text-sm text-slate-400">
+          Filter by provider or keyword, then open any event to inspect payload
+          details and run replay tests.
+        </p>
+      </div>
+
+      <form className="grid gap-3 rounded-xl border border-slate-700 bg-[#111927]/80 p-4 md:grid-cols-[1fr,180px,auto]">
+        <input
+          type="search"
+          name="q"
+          defaultValue={search}
+          placeholder="Search path, body, or provider"
+          className="w-full rounded-lg border border-slate-700 bg-[#0b111c] px-3 py-2 text-sm text-slate-100 outline-none transition focus:border-cyan-400"
+        />
         <select
           name="provider"
-          defaultValue={params.provider ?? "all"}
-          className="h-10 rounded-md border border-[var(--border)] bg-[#0b0f14] px-3 text-sm"
+          defaultValue={provider}
+          className="rounded-lg border border-slate-700 bg-[#0b111c] px-3 py-2 text-sm text-slate-100 outline-none transition focus:border-cyan-400"
         >
           <option value="all">All providers</option>
-          <option value="Stripe">Stripe</option>
-          <option value="Shopify">Shopify</option>
-          <option value="GitHub">GitHub</option>
-          <option value="Unknown">Unknown</option>
+          <option value="stripe">Stripe</option>
+          <option value="shopify">Shopify</option>
+          <option value="github">GitHub</option>
+          <option value="slack">Slack</option>
+          <option value="resend">Resend</option>
+          <option value="postmark">Postmark</option>
+          <option value="custom">Custom</option>
         </select>
-        <input
-          name="q"
-          defaultValue={params.q ?? ""}
-          placeholder="Search event type, payload, or path"
-          className="h-10 rounded-md border border-[var(--border)] bg-[#0b0f14] px-3 text-sm"
-        />
-        <button className="h-10 rounded-md border border-[var(--border)] px-4 text-sm hover:bg-[var(--surface-2)]">Filter</button>
+        <button
+          type="submit"
+          className="rounded-lg bg-cyan-400 px-4 py-2 text-sm font-semibold text-slate-950 transition hover:bg-cyan-300"
+        >
+          Apply Filters
+        </button>
       </form>
-      <WebhookList webhooks={webhooks} />
+
+      <WebhookList items={webhooks} />
     </div>
   );
 }

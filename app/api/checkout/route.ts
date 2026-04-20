@@ -1,47 +1,40 @@
-import { NextRequest, NextResponse } from "next/server";
-import { z } from "zod";
-import { createLemonCheckoutUrl, verifyCheckoutToken } from "@/lib/lemonsqueezy";
+import { NextResponse } from "next/server";
+import { getServerAuthSession } from "@/lib/auth";
+import { createCheckoutStateToken } from "@/lib/paywall";
 
-const checkoutSchema = z.object({
-  userId: z.string().min(8),
-  email: z.string().email()
-});
+export async function POST(request: Request) {
+  const session = await getServerAuthSession();
 
-export async function POST(request: NextRequest) {
-  try {
-    const body = await request.json();
-    const parsed = checkoutSchema.safeParse(body);
-    if (!parsed.success) {
-      return NextResponse.json({ error: "Invalid checkout payload" }, { status: 400 });
-    }
-
-    const origin = request.nextUrl.origin;
-    const checkoutUrl = await createLemonCheckoutUrl(parsed.data.userId, parsed.data.email, origin);
-
-    return NextResponse.json({ checkoutUrl });
-  } catch (error) {
-    console.error(error);
-    return NextResponse.json({ error: "Checkout creation failed" }, { status: 500 });
-  }
-}
-
-export async function GET(request: NextRequest) {
-  const success = request.nextUrl.searchParams.get("success");
-  const userId = request.nextUrl.searchParams.get("user");
-  const sig = request.nextUrl.searchParams.get("sig");
-
-  if (success !== "1" || !userId || !sig || !verifyCheckoutToken(userId, sig)) {
-    return NextResponse.redirect(new URL("/?checkout=failed", request.url));
+  if (!session?.user?.id) {
+    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  const response = NextResponse.redirect(new URL("/dashboard", request.url));
-  response.cookies.set("wrt_paid", "1", {
-    httpOnly: true,
-    secure: true,
-    sameSite: "lax",
-    path: "/",
-    maxAge: 60 * 60 * 24 * 30
-  });
+  const productId = process.env.NEXT_PUBLIC_LEMON_SQUEEZY_PRODUCT_ID;
+  const storeId = process.env.NEXT_PUBLIC_LEMON_SQUEEZY_STORE_ID;
 
-  return response;
+  if (!productId || !storeId) {
+    return NextResponse.json(
+      {
+        error:
+          "Missing Lemon Squeezy public env vars. Add NEXT_PUBLIC_LEMON_SQUEEZY_STORE_ID and NEXT_PUBLIC_LEMON_SQUEEZY_PRODUCT_ID before checkout."
+      },
+      { status: 500 }
+    );
+  }
+
+  const requestUrl = new URL(request.url);
+  const baseUrl = process.env.NEXT_PUBLIC_APP_URL || requestUrl.origin;
+  const checkoutState = createCheckoutStateToken(session.user.id);
+  const successUrl = `${baseUrl}/api/checkout/success?state=${encodeURIComponent(checkoutState)}`;
+
+  const checkoutUrl = new URL(`https://checkout.lemonsqueezy.com/buy/${productId}`);
+  checkoutUrl.searchParams.set("checkout[embed]", "1");
+  checkoutUrl.searchParams.set("checkout[media]", "0");
+  checkoutUrl.searchParams.set("checkout[logo]", "0");
+  checkoutUrl.searchParams.set("checkout[desc]", "0");
+  checkoutUrl.searchParams.set("checkout[custom][store_id]", storeId);
+  checkoutUrl.searchParams.set("checkout[success_url]", successUrl);
+  checkoutUrl.searchParams.set("checkout[custom][user_id]", session.user.id);
+
+  return NextResponse.json({ checkoutUrl: checkoutUrl.toString() });
 }

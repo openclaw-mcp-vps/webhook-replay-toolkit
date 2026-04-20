@@ -1,35 +1,54 @@
 import Link from "next/link";
-import { notFound, redirect } from "next/navigation";
-import { auth } from "@/lib/auth";
-import { getWebhookById, listReplaysForWebhook } from "@/lib/database";
-import { ReplayForm } from "@/components/replay-form";
-import { WebhookDetail } from "@/components/webhook-detail";
+import { notFound } from "next/navigation";
+import { ReplayModal } from "@/components/ReplayModal";
+import { WebhookDetails } from "@/components/WebhookDetails";
+import { getServerAuthSession } from "@/lib/auth";
+import { getWebhookById, listReplayLogsForWebhook } from "@/lib/db";
 
-export default async function WebhookDetailPage({ params }: { params: Promise<{ id: string }> }) {
-  const session = await auth();
+export const metadata = {
+  title: "Webhook Details"
+};
+
+export default async function WebhookDetailsPage({
+  params
+}: {
+  params: Promise<{ id: string }>;
+}) {
+  const session = await getServerAuthSession();
+
   if (!session?.user?.id) {
-    redirect("/");
+    return null;
   }
 
   const { id } = await params;
-  const webhook = getWebhookById(session.user.id, id);
+
+  const webhook = await getWebhookById(session.user.id, id);
 
   if (!webhook) {
     notFound();
   }
 
-  const replays = listReplaysForWebhook(webhook.id);
+  const replayLogs = await listReplayLogsForWebhook(session.user.id, webhook.id);
 
   return (
-    <div className="space-y-5">
-      <div className="flex items-center justify-between">
-        <h1 className="text-2xl font-semibold tracking-tight">Webhook detail</h1>
-        <Link href="/dashboard/webhooks" className="text-sm text-[var(--muted)] hover:text-[var(--text)]">
-          Back to webhooks
-        </Link>
+    <div className="space-y-6">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div>
+          <Link
+            href="/dashboard/webhooks"
+            className="text-sm text-cyan-300 transition hover:text-cyan-200"
+          >
+            ← Back to timeline
+          </Link>
+          <h1 className="mt-2 text-2xl font-bold text-white">
+            {webhook.provider.toUpperCase()} webhook
+          </h1>
+        </div>
+
+        <ReplayModal webhookId={webhook.id} />
       </div>
-      <ReplayForm webhookId={webhook.id} />
-      <WebhookDetail webhook={webhook} replays={replays} />
+
+      <WebhookDetails webhook={webhook} replayLogs={replayLogs} />
     </div>
   );
 }

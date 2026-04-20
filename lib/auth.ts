@@ -1,56 +1,94 @@
-import NextAuth from "next-auth";
-import Credentials from "next-auth/providers/credentials";
-import { createHash } from "crypto";
+import bcrypt from "bcryptjs";
+import { getServerSession, type NextAuthOptions } from "next-auth";
+import CredentialsProvider from "next-auth/providers/credentials";
 import { z } from "zod";
-import { upsertUser } from "@/lib/database";
+import { getPaymentStatus, getUserByEmail } from "@/lib/db";
 
 const credentialsSchema = z.object({
-  email: z.string().email(),
-  password: z.string().min(8)
+  email: z.string().email().max(255),
+  password: z.string().min(8).max(128)
 });
 
-export const { handlers, auth, signIn, signOut } = NextAuth({
-  session: { strategy: "jwt" },
+export const authOptions: NextAuthOptions = {
+  session: {
+    strategy: "jwt"
+  },
+  secret: process.env.NEXTAUTH_SECRET,
+  pages: {
+    signIn: "/login"
+  },
   providers: [
-    Credentials({
-      name: "email-password",
+    CredentialsProvider({
+      name: "Email + Password",
       credentials: {
-        email: { label: "Email", type: "email" },
-        password: { label: "Password", type: "password" }
+        email: {
+          label: "Email",
+          type: "email"
+        },
+        password: {
+          label: "Password",
+          type: "password"
+        }
       },
-      authorize: async (credentials) => {
+      async authorize(credentials) {
         const parsed = credentialsSchema.safeParse(credentials);
+
         if (!parsed.success) {
           return null;
         }
 
-        const email = parsed.data.email.toLowerCase();
-        const id = createHash("sha256").update(email).digest("hex").slice(0, 24);
-        upsertUser(id, email);
+        const user = await getUserByEmail(parsed.data.email);
+
+        if (!user) {
+          return null;
+        }
+
+        const validPassword = await bcrypt.compare(
+          parsed.data.password,
+          user.password_hash
+        );
+
+        if (!validPassword) {
+          return null;
+        }
+
+        const paymentStatus = await getPaymentStatus(user.id);
 
         return {
-          id,
-          email,
-          name: email.split("@")[0]
+          id: user.id,
+          email: user.email,
+          name: user.name,
+          subdomain: user.subdomain,
+          captureKey: user.capture_key,
+          paid: paymentStatus === "active"
         };
       }
     })
   ],
-  pages: {
-    signIn: "/"
-  },
   callbacks: {
-    jwt: async ({ token, user }) => {
-      if (user?.id) {
-        token.userId = user.id;
+    async jwt({ token, user }) {
+      if (user) {
+        token.id = user.id;
+        token.captureKey = user.captureKey;
+        token.subdomain = user.subdomain;
+        token.paid = user.paid;
       }
+
       return token;
     },
-    session: async ({ session, token }) => {
-      if (session.user && token.userId) {
-        session.user.id = String(token.userId);
+    async session({ session, token }) {
+      if (session.user) {
+        session.user.id = token.id;
+        session.user.captureKey = token.captureKey;
+        session.user.subdomain = token.subdomain;
+        session.user.paid = Boolean(token.paid);
       }
+
       return session;
     }
   }
-});
+};
+
+export function getServerAuthSession() {
+  return getServerSession(authOptions);
+}

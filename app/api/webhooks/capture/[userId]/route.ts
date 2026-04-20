@@ -1,61 +1,94 @@
-import { NextRequest, NextResponse } from "next/server";
-import { z } from "zod";
-import { createWebhook } from "@/lib/database";
+import { NextResponse, type NextRequest } from "next/server";
+import {
+  getUserByCaptureKey,
+  getUserById,
+  getUserBySubdomain,
+  insertWebhook
+} from "@/lib/db";
+import {
+  detectWebhookProvider,
+  getSourceIp,
+  getSubdomainFromHost,
+  normalizeHeadersForStorage
+} from "@/lib/webhook-proxy";
 
-const paramsSchema = z.object({
-  userId: z.string().min(8)
-});
+type Params = {
+  userId: string;
+};
 
-function detectProvider(headers: Record<string, string>): { provider: string; eventType: string } {
-  if (headers["stripe-signature"]) {
-    return { provider: "Stripe", eventType: headers["stripe-event"] || "stripe.event" };
+async function resolveCaptureUser(captureIdentifier: string, req: NextRequest) {
+  const byCapture = await getUserByCaptureKey(captureIdentifier);
+
+  if (byCapture) {
+    return byCapture;
   }
 
-  if (headers["x-shopify-topic"]) {
-    return { provider: "Shopify", eventType: headers["x-shopify-topic"] };
+  const byId = await getUserById(captureIdentifier);
+
+  if (byId) {
+    return byId;
   }
 
-  if (headers["x-github-event"]) {
-    return { provider: "GitHub", eventType: headers["x-github-event"] };
+  const host = req.headers.get("x-forwarded-host") || req.headers.get("host");
+  const subdomain = getSubdomainFromHost(host);
+
+  if (!subdomain) {
+    return null;
   }
 
-  return { provider: "Unknown", eventType: headers["x-event-type"] || "unknown.event" };
+  return getUserBySubdomain(subdomain);
 }
 
-export async function POST(request: NextRequest, context: { params: Promise<{ userId: string }> }) {
-  const rawParams = await context.params;
-  const parsedParams = paramsSchema.safeParse(rawParams);
+async function captureWebhook(
+  request: NextRequest,
+  { params }: { params: Promise<Params> }
+) {
+  const { userId } = await params;
 
-  if (!parsedParams.success) {
-    return NextResponse.json({ error: "Invalid user id" }, { status: 400 });
+  const user = await resolveCaptureUser(userId, request);
+
+  if (!user) {
+    return NextResponse.json(
+      { error: "Capture route does not map to a valid user" },
+      { status: 404 }
+    );
   }
 
-  const body = await request.text();
-  const headers: Record<string, string> = {};
-  request.headers.forEach((value, key) => {
-    headers[key.toLowerCase()] = value;
-  });
+  const body =
+    request.method === "GET" || request.method === "HEAD"
+      ? ""
+      : await request.text();
 
-  const provider = detectProvider(headers);
-  const ip = request.headers.get("x-forwarded-for")?.split(",")[0]?.trim() || "unknown";
-  const query = request.nextUrl.searchParams.toString();
+  const url = new URL(request.url);
+  const headers = normalizeHeadersForStorage(request.headers);
+  const provider = detectWebhookProvider(headers);
 
-  const record = createWebhook({
-    userId: parsedParams.data.userId,
-    provider: provider.provider,
-    eventType: provider.eventType,
+  const webhook = await insertWebhook({
+    userId: user.id,
+    provider,
     method: request.method,
-    path: request.nextUrl.pathname,
-    query,
-    ip,
+    path: url.pathname,
+    query: url.search,
     headers,
     body,
-    bodyType: headers["content-type"] || "unknown"
+    sourceIp: getSourceIp(request.headers)
   });
 
-  return NextResponse.json({ received: true, id: record.id });
+  return NextResponse.json(
+    {
+      received: true,
+      webhookId: webhook.id,
+      provider,
+      capturedAt: webhook.received_at
+    },
+    { status: 200 }
+  );
 }
 
-export async function GET() {
-  return NextResponse.json({ error: "POST required" }, { status: 405 });
-}
+export { captureWebhook as GET };
+export { captureWebhook as HEAD };
+export { captureWebhook as POST };
+export { captureWebhook as PUT };
+export { captureWebhook as PATCH };
+export { captureWebhook as DELETE };
+export { captureWebhook as OPTIONS };
