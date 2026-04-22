@@ -1,52 +1,83 @@
-import { createHmac } from "crypto";
-import { createCheckout, lemonSqueezySetup } from "@lemonsqueezy/lemonsqueezy.js";
+import { createHmac, timingSafeEqual } from "node:crypto";
 
-function getRequiredEnv(name: string): string {
-  const value = process.env[name];
-  if (!value) {
-    throw new Error(`Missing environment variable: ${name}`);
-  }
-  return value;
-}
+export type StripeEventObject = {
+  id?: string;
+  email?: string;
+  customer?: string;
+  customer_email?: string;
+  customer_details?: {
+    email?: string;
+  };
+};
 
-export function signCheckoutToken(userId: string): string {
-  return createHmac("sha256", getRequiredEnv("LEMON_SQUEEZY_WEBHOOK_SECRET")).update(userId).digest("hex");
-}
+export type StripeWebhookEvent = {
+  id: string;
+  type: string;
+  data: {
+    object: StripeEventObject;
+  };
+};
 
-export function verifyCheckoutToken(userId: string, sig: string): boolean {
-  return signCheckoutToken(userId) === sig;
-}
+function parseStripeSignatureHeader(signatureHeader: string) {
+  const parts = signatureHeader.split(",").map((part) => part.trim());
+  let timestamp: string | null = null;
+  const signatures: string[] = [];
 
-export async function createLemonCheckoutUrl(userId: string, email: string, origin: string): Promise<string> {
-  const apiKey = getRequiredEnv("LEMON_SQUEEZY_API_KEY");
-  const storeId = Number(getRequiredEnv("NEXT_PUBLIC_LEMON_SQUEEZY_STORE_ID"));
-  const productId = Number(getRequiredEnv("NEXT_PUBLIC_LEMON_SQUEEZY_PRODUCT_ID"));
-
-  lemonSqueezySetup({ apiKey, onError: (error) => console.error("Lemon Squeezy setup failed", error) });
-
-  const sig = signCheckoutToken(userId);
-  const checkout = await createCheckout(storeId, productId, {
-    checkoutOptions: {
-      embed: true,
-      media: false,
-      logo: false
-    },
-    checkoutData: {
-      email,
-      custom: {
-        user_id: userId
-      }
-    },
-    productOptions: {
-      enabledVariants: [],
-      redirectUrl: `${origin}/api/checkout?success=1&user=${encodeURIComponent(userId)}&sig=${sig}`
+  for (const part of parts) {
+    if (part.startsWith("t=")) {
+      timestamp = part.slice(2);
     }
-  });
 
-  const checkoutUrl = checkout.data?.data?.attributes?.url;
-  if (!checkoutUrl) {
-    throw new Error("Unable to create Lemon Squeezy checkout URL");
+    if (part.startsWith("v1=")) {
+      signatures.push(part.slice(3));
+    }
   }
 
-  return checkoutUrl;
+  return { timestamp, signatures };
+}
+
+function secureEquals(a: string, b: string) {
+  const left = Buffer.from(a, "utf8");
+  const right = Buffer.from(b, "utf8");
+
+  if (left.length !== right.length) {
+    return false;
+  }
+
+  return timingSafeEqual(left, right);
+}
+
+export function verifyStripeWebhookSignature(rawBody: string, signatureHeader: string, secret: string) {
+  const parsed = parseStripeSignatureHeader(signatureHeader);
+
+  if (!parsed.timestamp || parsed.signatures.length === 0) {
+    return false;
+  }
+
+  const signedPayload = `${parsed.timestamp}.${rawBody}`;
+  const expected = createHmac("sha256", secret).update(signedPayload, "utf8").digest("hex");
+
+  return parsed.signatures.some((signature) => secureEquals(expected, signature));
+}
+
+export function extractAccessGrantFromStripeEvent(event: StripeWebhookEvent) {
+  const obj = event.data.object;
+  const email = obj.customer_details?.email ?? obj.customer_email ?? obj.email;
+
+  if (!email) {
+    return null;
+  }
+
+  const deactivateEventTypes = new Set([
+    "customer.subscription.deleted",
+    "invoice.payment_failed",
+    "customer.subscription.paused"
+  ]);
+
+  return {
+    email,
+    stripeCustomerId: obj.customer ?? null,
+    checkoutSessionId: obj.id ?? null,
+    active: !deactivateEventTypes.has(event.type)
+  };
 }

@@ -1,185 +1,219 @@
 import Link from "next/link";
-import Script from "next/script";
-import { ArrowRight, Bug, Clock3, ShieldCheck, Zap } from "lucide-react";
-import { getServerAuthSession } from "@/lib/auth";
-import { PricingCard } from "@/components/PricingCard";
+import { ArrowRight, Bug, Cable, CloudCog, Repeat2, ShieldCheck, TimerReset, Webhook } from "lucide-react";
+
+import { PricingCard } from "@/components/pricing-card";
+import { Button } from "@/components/ui/button";
+import { Card, CardContent } from "@/components/ui/card";
+
+const providerCards = [
+  {
+    title: "Stripe",
+    detail: "Capture `checkout.session.completed`, invoice updates, and subscription events as they happen."
+  },
+  {
+    title: "Shopify",
+    detail: "Debug order/create and app/uninstalled webhooks without waiting for a customer action."
+  },
+  {
+    title: "GitHub",
+    detail: "Replay push, PR, and issue events against new commits while preserving signatures."
+  },
+  {
+    title: "Any provider",
+    detail: "Slack, Resend, Postmark, or custom services work through the same capture endpoint."
+  }
+];
 
 const faqs = [
   {
-    question: "How do capture URLs work?",
+    question: "How do I start capturing webhooks?",
     answer:
-      "Each account gets a private capture key and subdomain. Point Stripe, Shopify, or GitHub webhooks to that URL and every request is stored with method, headers, body, and timestamp."
+      "Point any provider webhook URL to your app domain at `/api/capture/<provider>`. Every request body and header is stored for replay."
+  },
+  {
+    question: "Does replay keep original payload fidelity?",
+    answer:
+      "Yes. The replay request forwards the raw body and can preserve original headers (minus unsafe hop-by-hop headers) for realistic debugging."
   },
   {
     question: "Can I replay to localhost?",
     answer:
-      "Yes. Paste any URL, including local tunnel URLs like ngrok or Cloudflare Tunnel. The replay sends the original method, headers, and body exactly as captured."
+      "Yes. During local development run this app locally and replay to `http://localhost:<port>/...` endpoints directly."
   },
   {
-    question: "Will this help with signature verification bugs?",
+    question: "How is access controlled?",
     answer:
-      "Yes. Because the original signature headers are preserved, you can test how your app handles real signature payloads instead of handcrafted curl approximations."
-  },
-  {
-    question: "Do you support non-Stripe providers?",
-    answer:
-      "Out of the box we detect Stripe, Shopify, GitHub, Slack, Resend, and Postmark. Custom webhook sources still capture and replay without special setup."
+      "The dashboard is paywalled. After purchase, Stripe webhook events create your access grant and you unlock with your billing email."
   }
 ];
 
-export default async function HomePage() {
-  const session = await getServerAuthSession();
+export default function HomePage() {
+  const paymentLink = process.env.NEXT_PUBLIC_STRIPE_PAYMENT_LINK;
 
   return (
-    <main>
-      <Script src="https://app.lemonsqueezy.com/js/lemon.js" strategy="afterInteractive" />
-
-      <section className="relative overflow-hidden border-b border-slate-800">
-        <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_70%_20%,rgba(34,211,238,0.22),transparent_45%)]" />
-        <div className="mx-auto max-w-6xl px-6 pb-20 pt-12 md:pb-24 md:pt-16">
-          <header className="flex items-center justify-between">
-            <p className="font-[family-name:var(--font-plex-mono)] text-xs uppercase tracking-[0.24em] text-cyan-300">
-              Webhook Replay Toolkit
-            </p>
-            <div className="flex items-center gap-3">
-              {session?.user?.id ? (
-                <Link
-                  className="rounded-lg border border-slate-700 px-3 py-2 text-sm text-slate-200 transition hover:border-cyan-400 hover:text-white"
-                  href="/dashboard"
-                >
-                  Dashboard
-                </Link>
-              ) : (
-                <Link
-                  className="rounded-lg border border-slate-700 px-3 py-2 text-sm text-slate-200 transition hover:border-cyan-400 hover:text-white"
-                  href="/login"
-                >
-                  Sign In
-                </Link>
-              )}
-            </div>
-          </header>
-
-          <div className="mt-14 grid gap-10 lg:grid-cols-[1.1fr,0.9fr] lg:items-start">
-            <div>
-              <h1 className="max-w-3xl text-4xl font-bold leading-tight text-white sm:text-5xl lg:text-6xl">
-                Capture live webhooks once. Replay them forever.
-              </h1>
-              <p className="mt-6 max-w-2xl text-lg text-slate-300">
-                Stop waiting on production events to fire again. Record real
-                Stripe, Shopify, and GitHub webhooks with full fidelity, then
-                replay them on demand against localhost, staging, or production.
-              </p>
-
-              <div className="mt-8 flex flex-wrap gap-4">
-                <Link
-                  href={session?.user?.id ? "/dashboard" : "/login?next=/dashboard"}
-                  className="inline-flex items-center gap-2 rounded-lg bg-cyan-400 px-5 py-3 text-sm font-semibold text-slate-950 transition hover:bg-cyan-300"
-                >
-                  {session?.user?.id ? "Open Dashboard" : "Start in 30 Seconds"}
-                  <ArrowRight className="h-4 w-4" />
-                </Link>
-                <a
-                  href="#pricing"
-                  className="inline-flex items-center gap-2 rounded-lg border border-slate-700 px-5 py-3 text-sm font-semibold text-slate-200 transition hover:border-cyan-400 hover:text-white"
-                >
-                  See Pricing
-                </a>
-              </div>
-
-              <div className="mt-10 grid gap-4 sm:grid-cols-3">
-                <div className="rounded-xl border border-slate-800 bg-slate-900/50 p-4">
-                  <Clock3 className="h-5 w-5 text-cyan-300" />
-                  <p className="mt-2 text-sm font-semibold text-white">
-                    Recover Hours
-                  </p>
-                  <p className="mt-1 text-xs text-slate-400">
-                    Replay failed events immediately instead of waiting for
-                    another production trigger.
-                  </p>
-                </div>
-                <div className="rounded-xl border border-slate-800 bg-slate-900/50 p-4">
-                  <Bug className="h-5 w-5 text-cyan-300" />
-                  <p className="mt-2 text-sm font-semibold text-white">
-                    Reproduce Edge Cases
-                  </p>
-                  <p className="mt-1 text-xs text-slate-400">
-                    Debug payload-specific bugs using real event bodies and
-                    headers.
-                  </p>
-                </div>
-                <div className="rounded-xl border border-slate-800 bg-slate-900/50 p-4">
-                  <ShieldCheck className="h-5 w-5 text-cyan-300" />
-                  <p className="mt-2 text-sm font-semibold text-white">
-                    Keep Traceability
-                  </p>
-                  <p className="mt-1 text-xs text-slate-400">
-                    Every replay is logged with status code, duration, and
-                    response body.
-                  </p>
-                </div>
-              </div>
-            </div>
-
-            <div className="rounded-2xl border border-slate-800 bg-[#111927]/85 p-6 shadow-2xl shadow-cyan-950/20">
-              <p className="font-[family-name:var(--font-plex-mono)] text-xs uppercase tracking-[0.16em] text-slate-400">
-                Why developers switch
-              </p>
-              <ul className="mt-4 space-y-4 text-sm text-slate-200">
-                <li>
-                  <strong className="text-white">Before:</strong> broken webhook,
-                  no payload copy, no way to replay, and no confidence fix works.
-                </li>
-                <li>
-                  <strong className="text-white">After:</strong> captured payload,
-                  one-click replay, and proof your endpoint handles the exact
-                  request that failed in production.
-                </li>
-              </ul>
-
-              <div className="mt-6 rounded-xl border border-cyan-400/30 bg-cyan-500/10 p-4">
-                <p className="flex items-center gap-2 text-sm font-semibold text-cyan-200">
-                  <Zap className="h-4 w-4" />
-                  Built for async webhook debugging loops
-                </p>
-                <p className="mt-2 text-xs text-cyan-100/90">
-                  Capture endpoint + searchable event history + replay executor in
-                  one place.
-                </p>
-              </div>
-            </div>
-          </div>
+    <main className="mx-auto max-w-6xl px-6 pb-20 pt-10 sm:px-8 lg:px-10">
+      <header className="mb-16">
+        <div className="mb-5 inline-flex items-center gap-2 rounded-full border border-sky-700/30 bg-sky-950/40 px-3 py-1 text-xs font-semibold text-sky-200">
+          <Webhook className="h-3.5 w-3.5" />
+          webhook-replay-toolkit
         </div>
-      </section>
 
-      <section id="pricing" className="mx-auto max-w-6xl px-6 py-20">
-        <div className="grid gap-10 lg:grid-cols-[1fr,0.85fr] lg:items-start">
+        <div className="grid gap-10 lg:grid-cols-[1.05fr_0.95fr] lg:items-start">
           <div>
-            <h2 className="text-3xl font-bold text-white">Simple pricing</h2>
-            <p className="mt-3 max-w-2xl text-slate-300">
-              One plan that covers your entire webhook workflow, from capture to
-              replay. No usage caps on events or endpoints.
+            <h1 className="text-balance text-4xl font-bold tracking-tight text-slate-100 sm:text-5xl lg:text-6xl">
+              Capture production webhooks once,
+              <span className="block bg-gradient-to-r from-sky-300 via-cyan-200 to-emerald-200 bg-clip-text text-transparent">
+                replay them forever.
+              </span>
+            </h1>
+            <p className="mt-6 max-w-2xl text-pretty text-lg text-slate-300">
+              Stop waiting for one-off webhook events to fire again. Webhook Replay Toolkit stores full request headers + raw payload,
+              then lets you replay to localhost, staging, or production with one click.
             </p>
+            <div className="mt-7 flex flex-wrap gap-3">
+              {paymentLink ? (
+                <Button asChild size="lg">
+                  <a href={paymentLink} target="_blank" rel="noreferrer">
+                    Start for $15/month
+                    <ArrowRight className="ml-2 h-4 w-4" />
+                  </a>
+                </Button>
+              ) : (
+                <Button size="lg" disabled>
+                  Set NEXT_PUBLIC_STRIPE_PAYMENT_LINK
+                </Button>
+              )}
+              <Button asChild variant="outline" size="lg">
+                <Link href="/dashboard">Open Dashboard</Link>
+              </Button>
+            </div>
+            <p className="mt-3 text-sm text-slate-500">Hosted Stripe checkout. No metered pricing. Cancel anytime.</p>
           </div>
 
-          <PricingCard signedIn={Boolean(session?.user?.id)} />
+          <Card className="border-slate-800/80 bg-[#0c121a]/90">
+            <CardContent className="space-y-4 pt-6 text-sm">
+              <div className="rounded-xl border border-slate-800 bg-slate-950/60 p-4">
+                <p className="mb-2 text-xs uppercase tracking-wide text-slate-500">Capture endpoint</p>
+                <code className="text-sky-200">https://your-app.com/api/capture/stripe</code>
+              </div>
+              <div className="rounded-xl border border-slate-800 bg-slate-950/60 p-4">
+                <p className="mb-2 text-xs uppercase tracking-wide text-slate-500">Replay target</p>
+                <code className="text-emerald-200">http://localhost:3000/api/webhooks/stripe</code>
+              </div>
+              <div className="rounded-xl border border-slate-800 bg-slate-950/60 p-4 text-slate-300">
+                <p className="mb-2 text-xs uppercase tracking-wide text-slate-500">Common result</p>
+                <p>
+                  Reproduce signature validation and parsing bugs in under a minute instead of waiting hours for another live checkout,
+                  order, or push event.
+                </p>
+              </div>
+            </CardContent>
+          </Card>
         </div>
+      </header>
+
+      <section className="mb-14 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+        {providerCards.map((item) => (
+          <Card key={item.title} className="border-slate-800/80 bg-slate-950/50">
+            <CardContent className="pt-6">
+              <h2 className="mb-2 text-lg font-semibold text-slate-100">{item.title}</h2>
+              <p className="text-sm text-slate-400">{item.detail}</p>
+            </CardContent>
+          </Card>
+        ))}
       </section>
 
-      <section className="mx-auto max-w-6xl px-6 pb-24">
-        <h2 className="text-3xl font-bold text-white">FAQ</h2>
-        <div className="mt-8 grid gap-4 md:grid-cols-2">
-          {faqs.map((item) => (
-            <article
-              key={item.question}
-              className="rounded-xl border border-slate-800 bg-[#101826]/80 p-5"
-            >
-              <h3 className="text-base font-semibold text-white">{item.question}</h3>
-              <p className="mt-2 text-sm text-slate-300">{item.answer}</p>
-            </article>
+      <section className="mb-16 grid gap-6 lg:grid-cols-3">
+        <Card>
+          <CardContent className="pt-6">
+            <div className="mb-3 inline-flex h-10 w-10 items-center justify-center rounded-xl bg-red-950/60 text-red-200">
+              <Bug className="h-5 w-5" />
+            </div>
+            <h3 className="mb-2 text-xl font-semibold">The Pain</h3>
+            <p className="text-sm text-slate-300">
+              Webhooks are async and non-idempotent. A failed event often cannot be retriggered cleanly, and handcrafted curl scripts miss
+              critical headers.
+            </p>
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardContent className="pt-6">
+            <div className="mb-3 inline-flex h-10 w-10 items-center justify-center rounded-xl bg-sky-950/50 text-sky-200">
+              <Cable className="h-5 w-5" />
+            </div>
+            <h3 className="mb-2 text-xl font-semibold">The System</h3>
+            <p className="text-sm text-slate-300">
+              A capture proxy records raw body + full headers into Postgres. Replays are sent on demand, with Redis-backed queue metadata for
+              operational traceability.
+            </p>
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardContent className="pt-6">
+            <div className="mb-3 inline-flex h-10 w-10 items-center justify-center rounded-xl bg-emerald-950/60 text-emerald-200">
+              <TimerReset className="h-5 w-5" />
+            </div>
+            <h3 className="mb-2 text-xl font-semibold">The Outcome</h3>
+            <p className="text-sm text-slate-300">
+              Faster incident response, cleaner debugging workflows, and fewer “cannot reproduce” dead ends during launches and migrations.
+            </p>
+          </CardContent>
+        </Card>
+      </section>
+
+      <section className="mb-16 grid gap-8 lg:grid-cols-[1fr_1.1fr]">
+        <div className="space-y-4">
+          <h2 className="text-3xl font-semibold tracking-tight">How replay works</h2>
+          <div className="space-y-4 text-sm text-slate-300">
+            <div className="rounded-xl border border-slate-800 bg-slate-900/40 p-4">
+              <p className="mb-1 font-semibold text-slate-100">1. Capture</p>
+              <p>
+                Route provider webhooks to <code>/api/capture/&lt;provider&gt;</code>. Every request gets an immutable event record.
+              </p>
+            </div>
+            <div className="rounded-xl border border-slate-800 bg-slate-900/40 p-4">
+              <p className="mb-1 font-semibold text-slate-100">2. Inspect</p>
+              <p>Search by provider or payload content, inspect signature headers, and review the exact JSON body in the dashboard.</p>
+            </div>
+            <div className="rounded-xl border border-slate-800 bg-slate-900/40 p-4">
+              <p className="mb-1 font-semibold text-slate-100">3. Replay</p>
+              <p>Send to localhost, staging, or prod in one click. Replay attempts are logged with response code, latency, and response body.</p>
+            </div>
+          </div>
+        </div>
+
+        <PricingCard />
+      </section>
+
+      <section className="mb-14">
+        <div className="mb-6 flex items-center gap-2">
+          <CloudCog className="h-5 w-5 text-sky-300" />
+          <h2 className="text-3xl font-semibold tracking-tight">FAQ</h2>
+        </div>
+        <div className="grid gap-3 md:grid-cols-2">
+          {faqs.map((faq) => (
+            <details key={faq.question} className="rounded-xl border border-slate-800 bg-slate-900/40 p-4">
+              <summary className="cursor-pointer list-none text-sm font-semibold text-slate-100">{faq.question}</summary>
+              <p className="mt-3 text-sm text-slate-300">{faq.answer}</p>
+            </details>
           ))}
         </div>
       </section>
+
+      <footer className="rounded-2xl border border-slate-800 bg-slate-900/40 p-5 text-sm text-slate-400">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <p className="inline-flex items-center gap-2">
+            <ShieldCheck className="h-4 w-4 text-emerald-300" />
+            Built for full-stack developers shipping webhook-driven products.
+          </p>
+          <p className="inline-flex items-center gap-2">
+            <Repeat2 className="h-4 w-4 text-sky-300" />
+            Replay faster. Ship with confidence.
+          </p>
+        </div>
+      </footer>
     </main>
   );
 }

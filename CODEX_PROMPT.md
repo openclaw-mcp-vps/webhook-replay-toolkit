@@ -11,27 +11,30 @@ NICHE: developer-tools
 PRICE: $$15/mo
 
 ARCHITECTURE SPEC:
-A Next.js web app with a webhook capture proxy service that records incoming webhooks to a database, then provides a dashboard to view, filter, and replay them to any endpoint. Uses a unique subdomain per user for webhook capture URLs and stores full request data including headers, body, and metadata.
+A Next.js web app with a webhook capture proxy service that records incoming webhooks to a database, then provides a dashboard to view, filter, and replay them to any endpoint. Uses PostgreSQL for storage, Redis for queuing replays, and Lemon Squeezy for subscriptions.
 
 PLANNED FILES:
 - app/page.tsx
 - app/dashboard/page.tsx
 - app/dashboard/webhooks/page.tsx
 - app/dashboard/webhooks/[id]/page.tsx
+- app/api/capture/[...slug]/route.ts
+- app/api/replay/route.ts
+- app/api/webhooks/route.ts
 - app/api/auth/[...nextauth]/route.ts
-- app/api/webhooks/capture/[userId]/route.ts
-- app/api/webhooks/replay/route.ts
-- app/api/checkout/route.ts
+- app/api/lemonsqueezy/webhook/route.ts
 - lib/db.ts
 - lib/auth.ts
-- lib/webhook-proxy.ts
-- components/WebhookList.tsx
-- components/WebhookDetails.tsx
-- components/ReplayModal.tsx
-- components/PricingCard.tsx
+- lib/redis.ts
+- lib/lemonsqueezy.ts
+- components/webhook-list.tsx
+- components/webhook-detail.tsx
+- components/replay-form.tsx
+- components/pricing-card.tsx
 - prisma/schema.prisma
+- middleware.ts
 
-DEPENDENCIES: next, react, tailwindcss, @prisma/client, prisma, next-auth, @auth/prisma-adapter, lemonsqueezy.js, axios, date-fns, lucide-react, @headlessui/react, clsx, zod
+DEPENDENCIES: next, react, typescript, tailwindcss, prisma, @prisma/client, next-auth, @auth/prisma-adapter, redis, axios, @lemonsqueezy/lemonsqueezy.js, lucide-react, date-fns, zod, react-hook-form, @hookform/resolvers, sonner
 
 REQUIREMENTS:
 - Next.js 15 with App Router (app/ directory)
@@ -39,7 +42,7 @@ REQUIREMENTS:
 - Tailwind CSS v4
 - shadcn/ui components (npx shadcn@latest init, then add needed components)
 - Dark theme ONLY — background #0d1117, no light mode
-- Lemon Squeezy checkout overlay for payments
+- Stripe Payment Link for payments (hosted checkout — use the URL directly as the Buy button href)
 - Landing page that converts: hero, problem, solution, pricing, FAQ
 - The actual tool/feature behind a paywall (cookie-based access after purchase)
 - Mobile responsive
@@ -59,9 +62,13 @@ REQUIREMENTS:
   to package.json dependencies and re-run npm install + npm run build until it passes.
 
 ENVIRONMENT VARIABLES (create .env.example):
-- NEXT_PUBLIC_LEMON_SQUEEZY_STORE_ID
-- NEXT_PUBLIC_LEMON_SQUEEZY_PRODUCT_ID
-- LEMON_SQUEEZY_WEBHOOK_SECRET
+- NEXT_PUBLIC_STRIPE_PAYMENT_LINK  (full URL, e.g. https://buy.stripe.com/test_XXX)
+- NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY  (pk_test_... or pk_live_...)
+- STRIPE_WEBHOOK_SECRET  (set when webhook is wired)
+
+BUY BUTTON RULE: the Buy button's href MUST be `process.env.NEXT_PUBLIC_STRIPE_PAYMENT_LINK`
+used as-is — do NOT construct URLs from a product ID, do NOT prepend any base URL,
+do NOT wrap it in an embed iframe. The link opens Stripe's hosted checkout directly.
 
 After creating all files:
 1. Run: npm install

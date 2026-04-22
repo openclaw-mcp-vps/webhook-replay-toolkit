@@ -1,504 +1,522 @@
 import { randomUUID } from "node:crypto";
-import { Pool, type PoolConfig } from "pg";
+import { Pool, type QueryResultRow } from "pg";
 
-export type PaymentStatus = "active" | "inactive" | "past_due";
+declare global {
+  // eslint-disable-next-line no-var
+  var __webhookReplayPool: Pool | undefined;
+  // eslint-disable-next-line no-var
+  var __webhookReplayDbReady: boolean | undefined;
+}
 
-export type UserRecord = {
+type JSONValue = string | number | boolean | null | JSONValue[] | { [key: string]: JSONValue };
+
+export type WebhookSummary = {
   id: string;
-  email: string;
-  name: string;
-  password_hash: string;
-  subdomain: string;
-  capture_key: string;
-  created_at: string;
-};
-
-export type WebhookRecord = {
-  id: string;
-  user_id: string;
   provider: string;
   method: string;
   path: string;
-  query: string;
+  contentType: string | null;
+  sourceIp: string | null;
+  receivedAt: string;
+  bodySize: number;
+};
+
+export type ReplayAttempt = {
+  id: string;
+  webhookId: string;
+  targetUrl: string;
+  method: string;
+  statusCode: number | null;
+  durationMs: number;
+  responseHeaders: Record<string, string>;
+  responseBody: string;
+  createdAt: string;
+};
+
+export type WebhookDetail = WebhookSummary & {
   headers: Record<string, string>;
   body: string;
-  body_size: number;
-  source_ip: string | null;
-  received_at: string;
-  replay_count: number;
-  last_replayed_at: string | null;
+  query: Record<string, string>;
+  parsedBody: JSONValue | null;
+  signature: string | null;
+  replayAttempts: ReplayAttempt[];
 };
 
-export type ReplayLogRecord = {
+export type DashboardStats = {
+  totalEvents: number;
+  eventsLast24h: number;
+  replayCount: number;
+  lastCaptureAt: string | null;
+};
+
+export type RecordWebhookInput = {
+  provider: string;
+  method: string;
+  path: string;
+  query: Record<string, string>;
+  headers: Record<string, string>;
+  body: string;
+  parsedBody: JSONValue | null;
+  sourceIp: string | null;
+  contentType: string | null;
+  signature: string | null;
+};
+
+export type RecordReplayAttemptInput = {
+  webhookId: string;
+  targetUrl: string;
+  method: string;
+  statusCode: number | null;
+  durationMs: number;
+  responseHeaders: Record<string, string>;
+  responseBody: string;
+};
+
+export type AccessGrant = {
   id: string;
-  webhook_id: string;
-  user_id: string;
-  target_url: string;
-  success: boolean;
-  status_code: number | null;
-  response_headers: Record<string, string>;
-  response_body: string;
-  duration_ms: number;
-  error_message: string | null;
-  attempted_at: string;
+  email: string;
+  active: boolean;
+  source: string;
+  stripeCustomerId: string | null;
+  checkoutSessionId: string | null;
+  lastEventId: string | null;
+  grantedAt: string;
+  updatedAt: string;
 };
 
-let pool: Pool | undefined;
-let schemaInitialized: Promise<void> | null = null;
+const pool =
+  globalThis.__webhookReplayPool ??
+  new Pool(
+    process.env.DATABASE_URL
+      ? {
+          connectionString: process.env.DATABASE_URL
+        }
+      : undefined
+  );
 
-function buildPoolConfig(): PoolConfig {
-  const connectionString = process.env.DATABASE_URL;
+if (process.env.NODE_ENV !== "production") {
+  globalThis.__webhookReplayPool = pool;
+}
 
-  if (!connectionString) {
-    throw new Error("DATABASE_URL is required to run webhook-replay-toolkit");
+let dbReady = globalThis.__webhookReplayDbReady ?? false;
+
+function assertDatabaseConfigured() {
+  if (!process.env.DATABASE_URL) {
+    throw new Error("DATABASE_URL is required to capture and replay webhooks.");
+  }
+}
+
+function normalizeJsonRecord(input: unknown): Record<string, string> {
+  if (!input || typeof input !== "object") {
+    return {};
   }
 
-  const isLocal =
-    connectionString.includes("localhost") ||
-    connectionString.includes("127.0.0.1");
+  return Object.entries(input as Record<string, unknown>).reduce<Record<string, string>>((acc, [key, value]) => {
+    acc[key] = typeof value === "string" ? value : JSON.stringify(value);
+    return acc;
+  }, {});
+}
 
+function mapWebhookSummary(row: QueryResultRow): WebhookSummary {
   return {
-    connectionString,
-    ssl: isLocal ? undefined : { rejectUnauthorized: false },
-    max: 8,
-    idleTimeoutMillis: 30_000,
-    connectionTimeoutMillis: 10_000
+    id: row.id,
+    provider: row.provider,
+    method: row.method,
+    path: row.path,
+    contentType: row.content_type,
+    sourceIp: row.source_ip,
+    receivedAt: row.received_at,
+    bodySize: row.body_size
   };
 }
 
-function getPool(): Pool {
-  if (!pool) {
-    pool = new Pool(buildPoolConfig());
+function mapReplayAttempt(row: QueryResultRow): ReplayAttempt {
+  return {
+    id: row.id,
+    webhookId: row.webhook_id,
+    targetUrl: row.target_url,
+    method: row.method,
+    statusCode: row.status_code,
+    durationMs: row.duration_ms,
+    responseHeaders: normalizeJsonRecord(row.response_headers),
+    responseBody: row.response_body ?? "",
+    createdAt: row.created_at
+  };
+}
+
+function mapAccessGrant(row: QueryResultRow): AccessGrant {
+  return {
+    id: row.id,
+    email: row.email,
+    active: row.active,
+    source: row.source,
+    stripeCustomerId: row.stripe_customer_id,
+    checkoutSessionId: row.checkout_session_id,
+    lastEventId: row.last_event_id,
+    grantedAt: row.granted_at,
+    updatedAt: row.updated_at
+  };
+}
+
+export async function ensureDatabase() {
+  assertDatabaseConfigured();
+
+  if (dbReady) {
+    return;
   }
 
-  return pool;
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS webhook_events (
+      id TEXT PRIMARY KEY,
+      provider TEXT NOT NULL,
+      method TEXT NOT NULL,
+      path TEXT NOT NULL,
+      query JSONB NOT NULL DEFAULT '{}'::jsonb,
+      headers JSONB NOT NULL,
+      body TEXT NOT NULL,
+      parsed_body JSONB,
+      source_ip TEXT,
+      content_type TEXT,
+      signature TEXT,
+      received_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_webhook_events_received_at
+      ON webhook_events (received_at DESC);
+
+    CREATE INDEX IF NOT EXISTS idx_webhook_events_provider_received
+      ON webhook_events (provider, received_at DESC);
+
+    CREATE TABLE IF NOT EXISTS replay_attempts (
+      id TEXT PRIMARY KEY,
+      webhook_id TEXT NOT NULL REFERENCES webhook_events(id) ON DELETE CASCADE,
+      target_url TEXT NOT NULL,
+      method TEXT NOT NULL,
+      status_code INTEGER,
+      duration_ms INTEGER NOT NULL,
+      response_headers JSONB NOT NULL DEFAULT '{}'::jsonb,
+      response_body TEXT NOT NULL DEFAULT '',
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_replay_attempts_webhook_id
+      ON replay_attempts (webhook_id, created_at DESC);
+
+    CREATE TABLE IF NOT EXISTS access_grants (
+      id TEXT PRIMARY KEY,
+      email TEXT NOT NULL UNIQUE,
+      active BOOLEAN NOT NULL DEFAULT TRUE,
+      source TEXT NOT NULL DEFAULT 'stripe',
+      stripe_customer_id TEXT,
+      checkout_session_id TEXT,
+      last_event_id TEXT,
+      granted_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+  `);
+
+  dbReady = true;
+  globalThis.__webhookReplayDbReady = true;
 }
 
-export async function initDb(): Promise<void> {
-  if (schemaInitialized) {
-    return schemaInitialized;
-  }
+export async function recordWebhook(input: RecordWebhookInput) {
+  await ensureDatabase();
 
-  schemaInitialized = (async () => {
-    const client = await getPool().connect();
+  const id = randomUUID();
 
-    try {
-      await client.query("BEGIN");
-
-      await client.query(`
-        CREATE TABLE IF NOT EXISTS users (
-          id TEXT PRIMARY KEY,
-          email TEXT NOT NULL UNIQUE,
-          name TEXT NOT NULL,
-          password_hash TEXT NOT NULL,
-          subdomain TEXT NOT NULL UNIQUE,
-          capture_key TEXT NOT NULL UNIQUE,
-          created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-        )
-      `);
-
-      await client.query(`
-        CREATE TABLE IF NOT EXISTS payments (
-          user_id TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
-          status TEXT NOT NULL DEFAULT 'inactive',
-          lemonsqueezy_order_id TEXT,
-          updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-        )
-      `);
-
-      await client.query(`
-        CREATE TABLE IF NOT EXISTS webhooks (
-          id TEXT PRIMARY KEY,
-          user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-          provider TEXT NOT NULL,
-          method TEXT NOT NULL,
-          path TEXT NOT NULL,
-          query TEXT NOT NULL,
-          headers JSONB NOT NULL,
-          body TEXT NOT NULL,
-          body_size INTEGER NOT NULL,
-          source_ip TEXT,
-          received_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-          replay_count INTEGER NOT NULL DEFAULT 0,
-          last_replayed_at TIMESTAMPTZ
-        )
-      `);
-
-      await client.query(`
-        CREATE TABLE IF NOT EXISTS replay_logs (
-          id TEXT PRIMARY KEY,
-          webhook_id TEXT NOT NULL REFERENCES webhooks(id) ON DELETE CASCADE,
-          user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-          target_url TEXT NOT NULL,
-          success BOOLEAN NOT NULL,
-          status_code INTEGER,
-          response_headers JSONB NOT NULL,
-          response_body TEXT NOT NULL,
-          duration_ms INTEGER NOT NULL,
-          error_message TEXT,
-          attempted_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-        )
-      `);
-
-      await client.query(
-        "CREATE INDEX IF NOT EXISTS idx_webhooks_user_received_at ON webhooks(user_id, received_at DESC)"
-      );
-      await client.query(
-        "CREATE INDEX IF NOT EXISTS idx_webhooks_provider ON webhooks(provider)"
-      );
-      await client.query(
-        "CREATE INDEX IF NOT EXISTS idx_replay_logs_webhook_attempted ON replay_logs(webhook_id, attempted_at DESC)"
-      );
-
-      await client.query("COMMIT");
-    } catch (error) {
-      await client.query("ROLLBACK");
-      schemaInitialized = null;
-      throw error;
-    } finally {
-      client.release();
-    }
-  })();
-
-  return schemaInitialized;
-}
-
-export async function createUser(input: {
-  email: string;
-  name: string;
-  passwordHash: string;
-  subdomain: string;
-  captureKey: string;
-}): Promise<UserRecord> {
-  await initDb();
-
-  const result = await getPool().query<UserRecord>(
+  await pool.query(
     `
-      INSERT INTO users (id, email, name, password_hash, subdomain, capture_key)
-      VALUES ($1, $2, $3, $4, $5, $6)
-      RETURNING *
+      INSERT INTO webhook_events (
+        id,
+        provider,
+        method,
+        path,
+        query,
+        headers,
+        body,
+        parsed_body,
+        source_ip,
+        content_type,
+        signature
+      )
+      VALUES (
+        $1,
+        $2,
+        $3,
+        $4,
+        $5::jsonb,
+        $6::jsonb,
+        $7,
+        $8::jsonb,
+        $9,
+        $10,
+        $11
+      )
     `,
     [
-      randomUUID(),
-      input.email.toLowerCase(),
-      input.name,
-      input.passwordHash,
-      input.subdomain,
-      input.captureKey
-    ]
-  );
-
-  return result.rows[0];
-}
-
-export async function getUserByEmail(
-  email: string
-): Promise<UserRecord | null> {
-  await initDb();
-
-  const result = await getPool().query<UserRecord>(
-    `SELECT * FROM users WHERE email = $1 LIMIT 1`,
-    [email.toLowerCase()]
-  );
-
-  return result.rows[0] ?? null;
-}
-
-export async function getUserById(id: string): Promise<UserRecord | null> {
-  await initDb();
-
-  const result = await getPool().query<UserRecord>(
-    `SELECT * FROM users WHERE id = $1 LIMIT 1`,
-    [id]
-  );
-
-  return result.rows[0] ?? null;
-}
-
-export async function getUserByCaptureKey(
-  captureKey: string
-): Promise<UserRecord | null> {
-  await initDb();
-
-  const result = await getPool().query<UserRecord>(
-    `SELECT * FROM users WHERE capture_key = $1 LIMIT 1`,
-    [captureKey]
-  );
-
-  return result.rows[0] ?? null;
-}
-
-export async function getUserBySubdomain(
-  subdomain: string
-): Promise<UserRecord | null> {
-  await initDb();
-
-  const result = await getPool().query<UserRecord>(
-    `SELECT * FROM users WHERE subdomain = $1 LIMIT 1`,
-    [subdomain]
-  );
-
-  return result.rows[0] ?? null;
-}
-
-export async function setPaymentStatus(input: {
-  userId: string;
-  status: PaymentStatus;
-  orderId?: string | null;
-}): Promise<void> {
-  await initDb();
-
-  await getPool().query(
-    `
-      INSERT INTO payments (user_id, status, lemonsqueezy_order_id)
-      VALUES ($1, $2, $3)
-      ON CONFLICT (user_id)
-      DO UPDATE SET
-        status = EXCLUDED.status,
-        lemonsqueezy_order_id = COALESCE(EXCLUDED.lemonsqueezy_order_id, payments.lemonsqueezy_order_id),
-        updated_at = NOW()
-    `,
-    [input.userId, input.status, input.orderId ?? null]
-  );
-}
-
-export async function getPaymentStatus(
-  userId: string
-): Promise<PaymentStatus> {
-  await initDb();
-
-  const result = await getPool().query<{ status: PaymentStatus }>(
-    `SELECT status FROM payments WHERE user_id = $1 LIMIT 1`,
-    [userId]
-  );
-
-  return result.rows[0]?.status ?? "inactive";
-}
-
-export async function insertWebhook(input: {
-  userId: string;
-  provider: string;
-  method: string;
-  path: string;
-  query: string;
-  headers: Record<string, string>;
-  body: string;
-  sourceIp: string | null;
-}): Promise<WebhookRecord> {
-  await initDb();
-
-  const result = await getPool().query<WebhookRecord>(
-    `
-      INSERT INTO webhooks
-      (id, user_id, provider, method, path, query, headers, body, body_size, source_ip)
-      VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8, $9, $10)
-      RETURNING *
-    `,
-    [
-      randomUUID(),
-      input.userId,
+      id,
       input.provider,
       input.method,
       input.path,
-      input.query,
+      JSON.stringify(input.query),
       JSON.stringify(input.headers),
       input.body,
-      Buffer.byteLength(input.body, "utf8"),
-      input.sourceIp
+      input.parsedBody ? JSON.stringify(input.parsedBody) : null,
+      input.sourceIp,
+      input.contentType,
+      input.signature
     ]
   );
 
-  return result.rows[0];
+  return id;
 }
 
-export async function listWebhooksByUser(
-  userId: string,
-  options?: {
-    provider?: string;
-    search?: string;
-    limit?: number;
-  }
-): Promise<WebhookRecord[]> {
-  await initDb();
+export async function listWebhooks(options?: {
+  provider?: string;
+  search?: string;
+  limit?: number;
+}) {
+  await ensureDatabase();
 
-  const values: Array<string | number> = [userId];
-  const filters: string[] = ["user_id = $1"];
+  const where: string[] = [];
+  const values: Array<string | number> = [];
 
   if (options?.provider && options.provider !== "all") {
-    values.push(options.provider.toLowerCase());
-    filters.push(`provider = $${values.length}`);
+    values.push(options.provider);
+    where.push(`provider = $${values.length}`);
   }
 
-  if (options?.search) {
-    values.push(`%${options.search.toLowerCase()}%`);
-    const idx = values.length;
-    filters.push(`(
-      LOWER(path) LIKE $${idx}
-      OR LOWER(body) LIKE $${idx}
-      OR LOWER(provider) LIKE $${idx}
-    )`);
+  if (options?.search?.trim()) {
+    values.push(`%${options.search.trim()}%`);
+    where.push(`(path ILIKE $${values.length} OR body ILIKE $${values.length} OR provider ILIKE $${values.length})`);
   }
 
-  const limit = Math.max(1, Math.min(options?.limit ?? 100, 500));
+  const limit = Math.min(Math.max(options?.limit ?? 50, 1), 200);
   values.push(limit);
 
   const query = `
-    SELECT *
-    FROM webhooks
-    WHERE ${filters.join(" AND ")}
+    SELECT
+      id,
+      provider,
+      method,
+      path,
+      content_type,
+      source_ip,
+      received_at,
+      OCTET_LENGTH(body) AS body_size
+    FROM webhook_events
+    ${where.length > 0 ? `WHERE ${where.join(" AND ")}` : ""}
     ORDER BY received_at DESC
     LIMIT $${values.length}
   `;
 
-  const result = await getPool().query<WebhookRecord>(query, values);
-  return result.rows;
+  const result = await pool.query(query, values);
+  return result.rows.map(mapWebhookSummary);
 }
 
-export async function getWebhookById(
-  userId: string,
-  webhookId: string
-): Promise<WebhookRecord | null> {
-  await initDb();
+export async function getWebhookById(id: string): Promise<WebhookDetail | null> {
+  await ensureDatabase();
 
-  const result = await getPool().query<WebhookRecord>(
-    `
-      SELECT *
-      FROM webhooks
-      WHERE id = $1 AND user_id = $2
-      LIMIT 1
-    `,
-    [webhookId, userId]
-  );
-
-  return result.rows[0] ?? null;
-}
-
-export async function insertReplayLog(input: {
-  webhookId: string;
-  userId: string;
-  targetUrl: string;
-  success: boolean;
-  statusCode: number | null;
-  responseHeaders: Record<string, string>;
-  responseBody: string;
-  durationMs: number;
-  errorMessage?: string | null;
-}): Promise<ReplayLogRecord> {
-  await initDb();
-
-  const client = await getPool().connect();
-
-  try {
-    await client.query("BEGIN");
-
-    const replayResult = await client.query<ReplayLogRecord>(
-      `
-        INSERT INTO replay_logs
-        (id, webhook_id, user_id, target_url, success, status_code, response_headers, response_body, duration_ms, error_message)
-        VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8, $9, $10)
-        RETURNING *
-      `,
-      [
-        randomUUID(),
-        input.webhookId,
-        input.userId,
-        input.targetUrl,
-        input.success,
-        input.statusCode,
-        JSON.stringify(input.responseHeaders),
-        input.responseBody,
-        input.durationMs,
-        input.errorMessage ?? null
-      ]
-    );
-
-    await client.query(
-      `
-        UPDATE webhooks
-        SET replay_count = replay_count + 1,
-            last_replayed_at = NOW()
-        WHERE id = $1
-      `,
-      [input.webhookId]
-    );
-
-    await client.query("COMMIT");
-
-    return replayResult.rows[0];
-  } catch (error) {
-    await client.query("ROLLBACK");
-    throw error;
-  } finally {
-    client.release();
-  }
-}
-
-export async function listReplayLogsForWebhook(
-  userId: string,
-  webhookId: string
-): Promise<ReplayLogRecord[]> {
-  await initDb();
-
-  const result = await getPool().query<ReplayLogRecord>(
-    `
-      SELECT *
-      FROM replay_logs
-      WHERE user_id = $1 AND webhook_id = $2
-      ORDER BY attempted_at DESC
-      LIMIT 20
-    `,
-    [userId, webhookId]
-  );
-
-  return result.rows;
-}
-
-export async function getDashboardMetrics(userId: string): Promise<{
-  totalWebhooks: number;
-  webhooksLast24h: number;
-  replayAttemptsLast24h: number;
-  failedReplaysLast24h: number;
-}> {
-  await initDb();
-
-  const result = await getPool().query<{
-    total_webhooks: string;
-    webhooks_last_24h: string;
-    replay_attempts_last_24h: string;
-    failed_replays_last_24h: string;
-  }>(
+  const webhookResult = await pool.query(
     `
       SELECT
-        (SELECT COUNT(*)::TEXT FROM webhooks WHERE user_id = $1) AS total_webhooks,
-        (
-          SELECT COUNT(*)::TEXT
-          FROM webhooks
-          WHERE user_id = $1
-            AND received_at >= NOW() - INTERVAL '24 hours'
-        ) AS webhooks_last_24h,
-        (
-          SELECT COUNT(*)::TEXT
-          FROM replay_logs
-          WHERE user_id = $1
-            AND attempted_at >= NOW() - INTERVAL '24 hours'
-        ) AS replay_attempts_last_24h,
-        (
-          SELECT COUNT(*)::TEXT
-          FROM replay_logs
-          WHERE user_id = $1
-            AND attempted_at >= NOW() - INTERVAL '24 hours'
-            AND success = FALSE
-        ) AS failed_replays_last_24h
+        id,
+        provider,
+        method,
+        path,
+        content_type,
+        source_ip,
+        received_at,
+        OCTET_LENGTH(body) AS body_size,
+        headers,
+        body,
+        query,
+        parsed_body,
+        signature
+      FROM webhook_events
+      WHERE id = $1
+      LIMIT 1
     `,
-    [userId]
+    [id]
   );
 
-  const row = result.rows[0];
+  const webhookRow = webhookResult.rows[0];
+  if (!webhookRow) {
+    return null;
+  }
+
+  const replayResult = await pool.query(
+    `
+      SELECT
+        id,
+        webhook_id,
+        target_url,
+        method,
+        status_code,
+        duration_ms,
+        response_headers,
+        response_body,
+        created_at
+      FROM replay_attempts
+      WHERE webhook_id = $1
+      ORDER BY created_at DESC
+      LIMIT 50
+    `,
+    [id]
+  );
 
   return {
-    totalWebhooks: Number(row.total_webhooks),
-    webhooksLast24h: Number(row.webhooks_last_24h),
-    replayAttemptsLast24h: Number(row.replay_attempts_last_24h),
-    failedReplaysLast24h: Number(row.failed_replays_last_24h)
+    ...mapWebhookSummary(webhookRow),
+    headers: normalizeJsonRecord(webhookRow.headers),
+    body: webhookRow.body,
+    query: normalizeJsonRecord(webhookRow.query),
+    parsedBody: (webhookRow.parsed_body as JSONValue | null) ?? null,
+    signature: webhookRow.signature,
+    replayAttempts: replayResult.rows.map(mapReplayAttempt)
   };
+}
+
+export async function recordReplayAttempt(input: RecordReplayAttemptInput) {
+  await ensureDatabase();
+
+  const id = randomUUID();
+
+  await pool.query(
+    `
+      INSERT INTO replay_attempts (
+        id,
+        webhook_id,
+        target_url,
+        method,
+        status_code,
+        duration_ms,
+        response_headers,
+        response_body
+      )
+      VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8)
+    `,
+    [
+      id,
+      input.webhookId,
+      input.targetUrl,
+      input.method,
+      input.statusCode,
+      input.durationMs,
+      JSON.stringify(input.responseHeaders),
+      input.responseBody
+    ]
+  );
+
+  return id;
+}
+
+export async function getDashboardStats(): Promise<DashboardStats> {
+  await ensureDatabase();
+
+  const [eventsResult, replayResult] = await Promise.all([
+    pool.query(`
+      SELECT
+        COUNT(*)::int AS total_events,
+        COUNT(*) FILTER (WHERE received_at >= NOW() - INTERVAL '24 hours')::int AS events_last_24h,
+        MAX(received_at) AS last_capture_at
+      FROM webhook_events
+    `),
+    pool.query(`SELECT COUNT(*)::int AS replay_count FROM replay_attempts`)
+  ]);
+
+  const eventsRow = eventsResult.rows[0] ?? {
+    total_events: 0,
+    events_last_24h: 0,
+    last_capture_at: null
+  };
+
+  const replayRow = replayResult.rows[0] ?? { replay_count: 0 };
+
+  return {
+    totalEvents: eventsRow.total_events,
+    eventsLast24h: eventsRow.events_last_24h,
+    replayCount: replayRow.replay_count,
+    lastCaptureAt: eventsRow.last_capture_at
+  };
+}
+
+export async function upsertAccessGrant(input: {
+  email: string;
+  source?: string;
+  stripeCustomerId?: string | null;
+  checkoutSessionId?: string | null;
+  lastEventId?: string | null;
+  active?: boolean;
+}) {
+  await ensureDatabase();
+
+  const id = randomUUID();
+  const normalizedEmail = input.email.trim().toLowerCase();
+
+  const result = await pool.query(
+    `
+      INSERT INTO access_grants (
+        id,
+        email,
+        active,
+        source,
+        stripe_customer_id,
+        checkout_session_id,
+        last_event_id
+      )
+      VALUES ($1, $2, $3, $4, $5, $6, $7)
+      ON CONFLICT (email)
+      DO UPDATE SET
+        active = EXCLUDED.active,
+        source = EXCLUDED.source,
+        stripe_customer_id = COALESCE(EXCLUDED.stripe_customer_id, access_grants.stripe_customer_id),
+        checkout_session_id = COALESCE(EXCLUDED.checkout_session_id, access_grants.checkout_session_id),
+        last_event_id = COALESCE(EXCLUDED.last_event_id, access_grants.last_event_id),
+        updated_at = NOW()
+      RETURNING *
+    `,
+    [
+      id,
+      normalizedEmail,
+      input.active ?? true,
+      input.source ?? "stripe",
+      input.stripeCustomerId ?? null,
+      input.checkoutSessionId ?? null,
+      input.lastEventId ?? null
+    ]
+  );
+
+  return mapAccessGrant(result.rows[0]);
+}
+
+export async function setAccessGrantStatus(email: string, active: boolean) {
+  await ensureDatabase();
+
+  const result = await pool.query(
+    `
+      UPDATE access_grants
+      SET active = $2, updated_at = NOW()
+      WHERE email = $1
+      RETURNING *
+    `,
+    [email.trim().toLowerCase(), active]
+  );
+
+  return result.rows[0] ? mapAccessGrant(result.rows[0]) : null;
+}
+
+export async function findActiveAccessGrantByEmail(email: string) {
+  await ensureDatabase();
+
+  const result = await pool.query(
+    `
+      SELECT *
+      FROM access_grants
+      WHERE email = $1 AND active = TRUE
+      LIMIT 1
+    `,
+    [email.trim().toLowerCase()]
+  );
+
+  return result.rows[0] ? mapAccessGrant(result.rows[0]) : null;
 }

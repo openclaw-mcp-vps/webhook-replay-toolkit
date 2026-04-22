@@ -1,39 +1,53 @@
 import * as React from "react";
 import { cva, type VariantProps } from "class-variance-authority";
+
 import { cn } from "@/lib/utils";
 
 const buttonVariants = cva(
-  "inline-flex items-center justify-center rounded-md text-sm font-medium transition-colors disabled:pointer-events-none disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#58a6ff]",
+  "inline-flex items-center justify-center whitespace-nowrap rounded-lg text-sm font-semibold transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-500 focus-visible:ring-offset-2 focus-visible:ring-offset-[#0d1117] disabled:pointer-events-none disabled:opacity-45",
   {
     variants: {
       variant: {
-        default: "bg-[#238636] text-white hover:bg-[#2ea043]",
-        secondary: "bg-[#21262d] text-[#c9d1d9] hover:bg-[#30363d]",
-        ghost: "text-[#c9d1d9] hover:bg-[#161b22]",
-        outline: "border border-[#30363d] bg-transparent text-[#c9d1d9] hover:bg-[#161b22]",
+        default: "bg-sky-500 text-slate-950 hover:bg-sky-400",
+        secondary: "bg-slate-800 text-slate-100 hover:bg-slate-700",
+        ghost: "bg-transparent text-slate-200 hover:bg-slate-800/80",
+        outline: "border border-slate-700 bg-transparent text-slate-100 hover:border-slate-500"
       },
       size: {
         default: "h-10 px-4 py-2",
-        sm: "h-9 px-3",
-        lg: "h-11 px-8",
-      },
+        sm: "h-9 rounded-md px-3",
+        lg: "h-11 rounded-xl px-6",
+        icon: "h-10 w-10"
+      }
     },
     defaultVariants: {
       variant: "default",
-      size: "default",
-    },
-  },
+      size: "default"
+    }
+  }
 );
 
 export interface ButtonProps
   extends React.ButtonHTMLAttributes<HTMLButtonElement>,
-    VariantProps<typeof buttonVariants> {}
+    VariantProps<typeof buttonVariants> {
+  asChild?: boolean;
+}
 
-const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(
-  ({ className, variant, size, ...props }, ref) => (
-    <button className={cn(buttonVariants({ variant, size, className }))} ref={ref} {...props} />
-  ),
+export const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(
+  ({ className, variant, size, asChild = false, children, ...props }, ref) => {
+    if (asChild) {
+      const child = React.Children.only(children) as React.ReactElement<{ className?: string }>;
+      return React.cloneElement(child, {
+        ...props,
+        className: cn(buttonVariants({ variant, size, className }), child.props.className)
+      });
+    }
+
+    return (
+      <button className={cn(buttonVariants({ variant, size, className }))} ref={ref} {...props}>
+        {children}
+      </button>
+    );
+  }
 );
 Button.displayName = "Button";
-
-export { Button, buttonVariants };

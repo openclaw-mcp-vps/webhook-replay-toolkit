@@ -1,136 +1,130 @@
-import Link from "next/link";
-import { formatDistanceToNow } from "date-fns";
-import { BarChart3, RefreshCcw, Webhook } from "lucide-react";
-import { getServerAuthSession } from "@/lib/auth";
-import { getDashboardMetrics, listWebhooksByUser } from "@/lib/db";
+import { formatDistanceToNowStrict } from "date-fns";
+import { Activity, Clock3, Repeat2, Waves } from "lucide-react";
 
-export const metadata = {
-  title: "Dashboard"
-};
+import { WebhookList } from "@/components/webhook-list";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { getDashboardStats, listWebhooks } from "@/lib/db";
+
+export const dynamic = "force-dynamic";
+
+async function getDashboardData() {
+  try {
+    const [stats, recentWebhooks] = await Promise.all([
+      getDashboardStats(),
+      listWebhooks({
+        limit: 12
+      })
+    ]);
+
+    return {
+      stats,
+      recentWebhooks,
+      error: null
+    };
+  } catch (error) {
+    return {
+      stats: null,
+      recentWebhooks: [],
+      error: error instanceof Error ? error.message : "Could not load dashboard data."
+    };
+  }
+}
 
 export default async function DashboardPage() {
-  const session = await getServerAuthSession();
+  const data = await getDashboardData();
 
-  if (!session?.user?.id) {
-    return null;
+  if (data.error || !data.stats) {
+    return (
+      <Card className="border-amber-700/40 bg-amber-950/20">
+        <CardHeader>
+          <CardTitle className="text-amber-100">Dashboard unavailable</CardTitle>
+          <CardDescription className="text-amber-200/80">
+            {data.error ?? "Could not load dashboard data."}
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="text-sm text-amber-100/90">
+          Add <code>DATABASE_URL</code> to connect Postgres, then reload this page.
+        </CardContent>
+      </Card>
+    );
   }
 
-  const [metrics, recentWebhooks] = await Promise.all([
-    getDashboardMetrics(session.user.id),
-    listWebhooksByUser(session.user.id, { limit: 8 })
-  ]);
+  const { stats, recentWebhooks } = data;
 
   return (
-    <div className="space-y-8">
-      <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-        <article className="rounded-xl border border-slate-700 bg-[#111927]/80 p-4">
-          <p className="text-xs uppercase tracking-[0.14em] text-slate-500">
-            Total Captured
-          </p>
-          <p className="mt-2 text-2xl font-bold text-white">
-            {metrics.totalWebhooks}
-          </p>
-        </article>
+    <div className="space-y-6">
+      <section className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+        <Card>
+          <CardHeader className="pb-2">
+            <CardDescription>Total Captures</CardDescription>
+            <CardTitle className="text-3xl">{stats.totalEvents.toLocaleString()}</CardTitle>
+          </CardHeader>
+          <CardContent className="pt-0 text-xs text-slate-500">All webhook requests stored in Postgres.</CardContent>
+        </Card>
 
-        <article className="rounded-xl border border-slate-700 bg-[#111927]/80 p-4">
-          <p className="text-xs uppercase tracking-[0.14em] text-slate-500">
-            Captured (24h)
-          </p>
-          <p className="mt-2 text-2xl font-bold text-white">
-            {metrics.webhooksLast24h}
-          </p>
-        </article>
+        <Card>
+          <CardHeader className="pb-2">
+            <CardDescription className="inline-flex items-center gap-1">
+              <Activity className="h-4 w-4 text-sky-300" />
+              Last 24 Hours
+            </CardDescription>
+            <CardTitle className="text-3xl">{stats.eventsLast24h.toLocaleString()}</CardTitle>
+          </CardHeader>
+          <CardContent className="pt-0 text-xs text-slate-500">Recent event volume for incident windows.</CardContent>
+        </Card>
 
-        <article className="rounded-xl border border-slate-700 bg-[#111927]/80 p-4">
-          <p className="text-xs uppercase tracking-[0.14em] text-slate-500">
-            Replay Attempts (24h)
-          </p>
-          <p className="mt-2 text-2xl font-bold text-white">
-            {metrics.replayAttemptsLast24h}
-          </p>
-        </article>
+        <Card>
+          <CardHeader className="pb-2">
+            <CardDescription className="inline-flex items-center gap-1">
+              <Repeat2 className="h-4 w-4 text-emerald-300" />
+              Replay Attempts
+            </CardDescription>
+            <CardTitle className="text-3xl">{stats.replayCount.toLocaleString()}</CardTitle>
+          </CardHeader>
+          <CardContent className="pt-0 text-xs text-slate-500">Every replay response is logged for auditing.</CardContent>
+        </Card>
 
-        <article className="rounded-xl border border-slate-700 bg-[#111927]/80 p-4">
-          <p className="text-xs uppercase tracking-[0.14em] text-slate-500">
-            Failed Replays (24h)
-          </p>
-          <p className="mt-2 text-2xl font-bold text-rose-300">
-            {metrics.failedReplaysLast24h}
-          </p>
-        </article>
+        <Card>
+          <CardHeader className="pb-2">
+            <CardDescription className="inline-flex items-center gap-1">
+              <Clock3 className="h-4 w-4 text-amber-300" />
+              Last Capture
+            </CardDescription>
+            <CardTitle className="text-base">
+              {stats.lastCaptureAt
+                ? formatDistanceToNowStrict(new Date(stats.lastCaptureAt), { addSuffix: true })
+                : "No captures yet"}
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="pt-0 text-xs text-slate-500">Incoming proxy health indicator.</CardContent>
+        </Card>
       </section>
 
-      <section className="grid gap-4 lg:grid-cols-3">
-        <article className="rounded-xl border border-slate-700 bg-[#111927]/80 p-5">
-          <Webhook className="h-5 w-5 text-cyan-300" />
-          <h2 className="mt-3 text-lg font-semibold text-white">Capture</h2>
-          <p className="mt-2 text-sm text-slate-300">
-            Point your provider to your private capture URL and every webhook is
-            persisted with full request metadata.
-          </p>
-        </article>
+      <Card>
+        <CardHeader>
+          <CardTitle className="inline-flex items-center gap-2 text-xl">
+            <Waves className="h-5 w-5 text-sky-300" />
+            Quick Start
+          </CardTitle>
+          <CardDescription>Paste these URLs into your provider webhook settings.</CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-3 text-sm">
+          <div className="rounded-lg border border-slate-800 bg-[#0d1117]/80 p-3 font-mono text-xs text-slate-300">
+            https://your-domain.com/api/capture/stripe
+          </div>
+          <div className="rounded-lg border border-slate-800 bg-[#0d1117]/80 p-3 font-mono text-xs text-slate-300">
+            https://your-domain.com/api/capture/shopify
+          </div>
+          <div className="rounded-lg border border-slate-800 bg-[#0d1117]/80 p-3 font-mono text-xs text-slate-300">
+            https://your-domain.com/api/capture/github
+          </div>
+        </CardContent>
+      </Card>
 
-        <article className="rounded-xl border border-slate-700 bg-[#111927]/80 p-5">
-          <RefreshCcw className="h-5 w-5 text-cyan-300" />
-          <h2 className="mt-3 text-lg font-semibold text-white">Replay</h2>
-          <p className="mt-2 text-sm text-slate-300">
-            Open any captured event and replay it to localhost, staging, or
-            production with one click.
-          </p>
-        </article>
-
-        <article className="rounded-xl border border-slate-700 bg-[#111927]/80 p-5">
-          <BarChart3 className="h-5 w-5 text-cyan-300" />
-          <h2 className="mt-3 text-lg font-semibold text-white">Diagnose</h2>
-          <p className="mt-2 text-sm text-slate-300">
-            Inspect replay responses, latency, and headers to verify fixes before
-            shipping.
-          </p>
-        </article>
-      </section>
-
-      <section className="rounded-xl border border-slate-700 bg-[#111927]/80 p-5">
-        <div className="flex items-center justify-between gap-4">
-          <h2 className="text-lg font-semibold text-white">Recent Webhooks</h2>
-          <Link
-            href="/dashboard/webhooks"
-            className="text-sm text-cyan-300 transition hover:text-cyan-200"
-          >
-            View all
-          </Link>
-        </div>
-
-        {recentWebhooks.length ? (
-          <ul className="mt-4 space-y-2">
-            {recentWebhooks.map((event) => (
-              <li key={event.id}>
-                <Link
-                  href={`/dashboard/webhooks/${event.id}`}
-                  className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-slate-700/80 bg-slate-900/40 px-4 py-3 transition hover:border-cyan-400/60"
-                >
-                  <div>
-                    <p className="text-sm font-semibold text-slate-100">
-                      {event.provider.toUpperCase()} {event.method}
-                    </p>
-                    <p className="font-[family-name:var(--font-plex-mono)] text-xs text-slate-400">
-                      {event.path}
-                    </p>
-                  </div>
-                  <span className="text-xs text-slate-400">
-                    {formatDistanceToNow(new Date(event.received_at), {
-                      addSuffix: true
-                    })}
-                  </span>
-                </Link>
-              </li>
-            ))}
-          </ul>
-        ) : (
-          <p className="mt-4 text-sm text-slate-400">
-            No events captured yet. Fire a webhook to your capture URL to start.
-          </p>
-        )}
-      </section>
+      <WebhookList
+        items={recentWebhooks}
+        description="Use filters in the Webhooks tab for deeper search and inspection."
+      />
     </div>
   );
 }
